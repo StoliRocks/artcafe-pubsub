@@ -5,6 +5,8 @@ from datetime import datetime, date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Path, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+from .routes import websocket_routes
+
 from artcafe_pubsub.models.agent import (
     Agent, AgentStatus, AgentType, AgentCreate, AgentUpdate, 
     AgentResponse, AgentStatusUpdate
@@ -32,6 +34,9 @@ logger.setLevel(logging.INFO)
 
 # Create router
 router = APIRouter()
+
+# Include WebSocket routes
+router.include_router(websocket_routes.router, prefix="/api/v1")
 
 # Create JWT authentication service
 jwt_auth = JWTAuth(

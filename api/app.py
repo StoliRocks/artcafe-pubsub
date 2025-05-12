@@ -21,8 +21,19 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app
 app = FastAPI(
     title="ArtCafe.ai PubSub API",
-    description="API for ArtCafe.ai PubSub service",
+    description="API for ArtCafe.ai PubSub service powering agent communication",
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/api/openapi.json",
+    openapi_tags=[
+        {"name": "Authentication", "description": "Authentication endpoints"},
+        {"name": "Agents", "description": "Agent management endpoints"},
+        {"name": "SSH Keys", "description": "SSH key management endpoints"},
+        {"name": "Channels", "description": "Channel management endpoints"},
+        {"name": "Tenant", "description": "Tenant management endpoints"},
+        {"name": "Usage", "description": "Usage metrics and billing endpoints"},
+    ],
 )
 
 # Set up middleware
@@ -66,21 +77,37 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def startup_event():
     """Execute on application startup"""
     logger.info("Starting ArtCafe.ai PubSub API...")
-    
+
     # Connect to NATS
     try:
         await nats_manager.connect()
         logger.info("Connected to NATS server")
     except Exception as e:
         logger.error(f"Failed to connect to NATS server: {e}")
-        
+
     # Ensure DynamoDB tables exist
     try:
         await dynamodb.ensure_tables_exist()
         logger.info("DynamoDB tables ready")
     except Exception as e:
         logger.error(f"Failed to ensure DynamoDB tables: {e}")
-        
+
+    # Start metrics service
+    try:
+        from infrastructure.metrics_service import metrics_service
+        await metrics_service.start()
+        logger.info("Metrics service started")
+    except Exception as e:
+        logger.error(f"Failed to start metrics service: {e}")
+
+    # Initialize challenge store
+    try:
+        from infrastructure.challenge_store import challenge_store
+        await challenge_store.ensure_table_exists()
+        logger.info("Challenge store initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize challenge store: {e}")
+
     logger.info("ArtCafe.ai PubSub API started")
 
 
@@ -88,10 +115,18 @@ async def startup_event():
 async def shutdown_event():
     """Execute on application shutdown"""
     logger.info("Shutting down ArtCafe.ai PubSub API...")
-    
+
+    # Stop metrics service
+    try:
+        from infrastructure.metrics_service import metrics_service
+        await metrics_service.stop()
+        logger.info("Metrics service stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop metrics service: {e}")
+
     # Close NATS connection
     await nats_manager.close()
-    
+
     logger.info("ArtCafe.ai PubSub API shutdown completed")
 
 

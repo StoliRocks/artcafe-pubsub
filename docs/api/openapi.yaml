@@ -1,0 +1,1496 @@
+openapi: 3.0.3
+info:
+  title: ArtCafe.ai PubSub API
+  description: |
+    # ArtCafe.ai PubSub API
+
+    This API provides access to the ArtCafe.ai PubSub service, which facilitates agent communication, management, and messaging.
+
+    ## Authentication
+
+    The API uses two authentication methods:
+    
+    1. **JWT Token Authentication**
+       - Used for general API access
+       - Pass the token in the `Authorization` header as a Bearer token: `Authorization: Bearer <your_token>`
+    
+    2. **SSH Key Authentication**
+       - Used for agent authentication
+       - Challenge-response based authentication flow
+       - Provides JWT tokens for subsequent requests
+
+    ## Multi-tenancy
+
+    All resources are scoped to a tenant ID. The tenant ID must be provided:
+    
+    - In the `x-tenant-id` header or
+    - In the JWT token payload
+
+    ## Rate Limiting
+
+    API rate limits are enforced based on the subscription tier of the tenant.
+  version: 1.0.0
+  contact:
+    name: ArtCafe.ai Support
+    email: support@artcafe.ai
+    url: https://artcafe.ai/support
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.artcafe.ai/v1
+    description: Production server
+  - url: https://api-dev.artcafe.ai/v1
+    description: Development server
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: Authentication
+    description: Authentication endpoints
+  - name: Agents
+    description: Agent management endpoints
+  - name: SSH Keys
+    description: SSH key management endpoints
+  - name: Channels
+    description: Channel management endpoints
+  - name: Tenant
+    description: Tenant management endpoints
+  - name: Usage
+    description: Usage metrics and billing endpoints
+
+paths:
+  /auth/challenge:
+    post:
+      summary: Generate a challenge for SSH key authentication
+      description: |
+        Generates a random challenge string that must be signed with a private SSH key.
+        
+        The challenge will expire after 5 minutes and can only be used once.
+      tags:
+        - Authentication
+      operationId: createChallenge
+      security:
+        - tenantAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeRequest'
+      responses:
+        '200':
+          description: Challenge successfully generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /auth/verify:
+    post:
+      summary: Verify a challenge response
+      description: |
+        Verifies a signed challenge response and issues a JWT token upon successful verification.
+        
+        The challenge must not be expired and the signature must be valid for the associated SSH key.
+      tags:
+        - Authentication
+      operationId: verifyChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Challenge response successfully verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /agents:
+    get:
+      summary: List all agents
+      description: Returns a list of all agents for the authenticated tenant
+      tags:
+        - Agents
+      operationId: listAgents
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/nextTokenParam'
+        - name: status
+          in: query
+          description: Filter by agent status
+          required: false
+          schema:
+            type: string
+            enum: [online, offline, idle, busy]
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+    
+    post:
+      summary: Register a new agent
+      description: Registers a new agent for the authenticated tenant
+      tags:
+        - Agents
+      operationId: createAgent
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCreate'
+      responses:
+        '201':
+          description: Agent successfully registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          description: Agent already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  
+  /agents/{agent_id}:
+    get:
+      summary: Get agent details
+      description: Returns details for a specific agent
+      tags:
+        - Agents
+      operationId: getAgent
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - name: agent_id
+          in: path
+          description: Agent ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /agents/{agent_id}/status:
+    put:
+      summary: Update agent status
+      description: Updates the status of a specific agent
+      tags:
+        - Agents
+      operationId: updateAgentStatus
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - name: agent_id
+          in: path
+          description: Agent ID
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentStatusUpdate'
+      responses:
+        '200':
+          description: Agent status successfully updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /ssh-keys:
+    get:
+      summary: List all SSH keys
+      description: Returns a list of all SSH keys for the authenticated tenant
+      tags:
+        - SSH Keys
+      operationId: listSSHKeys
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/nextTokenParam'
+        - name: agent_id
+          in: query
+          description: Filter by agent ID
+          required: false
+          schema:
+            type: string
+        - name: key_type
+          in: query
+          description: Filter by key type
+          required: false
+          schema:
+            type: string
+            enum: [access, agent, deployment]
+      responses:
+        '200':
+          description: List of SSH keys
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeysResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+    
+    post:
+      summary: Add a new SSH key
+      description: Adds a new SSH key for the authenticated tenant
+      tags:
+        - SSH Keys
+      operationId: createSSHKey
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SSHKeyCreate'
+      responses:
+        '201':
+          description: SSH key successfully added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+  
+  /ssh-keys/{key_id}:
+    get:
+      summary: Get SSH key details
+      description: Returns details for a specific SSH key
+      tags:
+        - SSH Keys
+      operationId: getSSHKey
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          description: SSH key ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSH key details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeyResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    
+    delete:
+      summary: Delete SSH key
+      description: Deletes a specific SSH key
+      tags:
+        - SSH Keys
+      operationId: deleteSSHKey
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          description: SSH key ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: SSH key successfully deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /ssh-keys/{key_id}/revoke:
+    post:
+      summary: Revoke SSH key
+      description: Revokes a specific SSH key
+      tags:
+        - SSH Keys
+      operationId: revokeSSHKey
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - name: key_id
+          in: path
+          description: SSH key ID
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SSHKeyRevoke'
+      responses:
+        '200':
+          description: SSH key successfully revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeyResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /channels:
+    get:
+      summary: List all channels
+      description: Returns a list of all channels for the authenticated tenant
+      tags:
+        - Channels
+      operationId: listChannels
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - $ref: '#/components/parameters/limitParam'
+        - $ref: '#/components/parameters/nextTokenParam'
+        - name: agent_id
+          in: query
+          description: Filter by agent ID
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of channels
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+    
+    post:
+      summary: Create a new channel
+      description: Creates a new channel for the authenticated tenant
+      tags:
+        - Channels
+      operationId: createChannel
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelCreate'
+      responses:
+        '201':
+          description: Channel successfully created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+  
+  /channels/{channel_id}:
+    get:
+      summary: Get channel details
+      description: Returns details for a specific channel
+      tags:
+        - Channels
+      operationId: getChannel
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - name: channel_id
+          in: path
+          description: Channel ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Channel details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /usage-metrics:
+    get:
+      summary: Get usage metrics
+      description: Returns usage metrics for the authenticated tenant
+      tags:
+        - Usage
+      operationId: getUsageMetrics
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      parameters:
+        - name: start_date
+          in: query
+          description: Start date for metrics (ISO format)
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          description: End date for metrics (ISO format)
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Usage metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageMetricsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+  
+  /tenant:
+    get:
+      summary: Get tenant details
+      description: Returns details for the authenticated tenant
+      tags:
+        - Tenant
+      operationId: getTenant
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      responses:
+        '200':
+          description: Tenant details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  
+  /tenant/subscription:
+    get:
+      summary: Get tenant subscription details
+      description: Returns subscription details for the authenticated tenant
+      tags:
+        - Tenant
+      operationId: getTenantSubscription
+      security:
+        - BearerAuth: []
+        - tenantAuth: []
+      responses:
+        '200':
+          description: Tenant subscription details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+components:
+  schemas:
+    # Authentication schemas
+    ChallengeRequest:
+      type: object
+      description: Request to generate a challenge for SSH key authentication
+      properties:
+        agent_id:
+          type: string
+          description: Agent ID (optional, but required for agent authentication)
+      example:
+        agent_id: "agent-1234567890"
+    
+    ChallengeResponse:
+      type: object
+      description: Response containing the generated challenge
+      required:
+        - challenge
+        - expires_at
+        - tenant_id
+      properties:
+        challenge:
+          type: string
+          description: The challenge string that must be signed
+        expires_at:
+          type: string
+          format: date-time
+          description: The expiration time of the challenge
+        tenant_id:
+          type: string
+          description: The tenant ID
+        agent_id:
+          type: string
+          description: The agent ID (if provided in the request)
+      example:
+        challenge: "8f7d9a6b5c4d3e2f1a0b1c2d3e4f5a6b"
+        expires_at: "2023-07-01T12:00:00Z"
+        tenant_id: "tenant-1234567890"
+        agent_id: "agent-1234567890"
+    
+    VerifyRequest:
+      type: object
+      description: Request to verify a challenge response
+      required:
+        - tenant_id
+        - key_id
+        - challenge
+        - response
+      properties:
+        tenant_id:
+          type: string
+          description: The tenant ID
+        key_id:
+          type: string
+          description: The SSH key ID
+        challenge:
+          type: string
+          description: The challenge string
+        response:
+          type: string
+          description: The signed challenge response (base64 encoded)
+        agent_id:
+          type: string
+          description: The agent ID (optional, but required for agent authentication)
+      example:
+        tenant_id: "tenant-1234567890"
+        key_id: "key-1234567890"
+        challenge: "8f7d9a6b5c4d3e2f1a0b1c2d3e4f5a6b"
+        response: "aGVsbG8gd29ybGQ="
+        agent_id: "agent-1234567890"
+    
+    VerifyResponse:
+      type: object
+      description: Response containing the verification result
+      required:
+        - valid
+        - message
+      properties:
+        valid:
+          type: boolean
+          description: Whether the verification was successful
+        message:
+          type: string
+          description: A message describing the verification result
+        token:
+          type: string
+          description: The JWT token (only present if verification was successful)
+      example:
+        valid: true
+        message: "Authentication successful"
+        token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    
+    # Agent schemas
+    Agent:
+      type: object
+      description: Agent model
+      required:
+        - agent_id
+        - tenant_id
+        - name
+        - status
+      properties:
+        agent_id:
+          type: string
+          description: The agent ID
+        tenant_id:
+          type: string
+          description: The tenant ID
+        name:
+          type: string
+          description: The agent name
+        description:
+          type: string
+          description: The agent description
+        status:
+          type: string
+          enum: [online, offline, idle, busy]
+          description: The agent status
+        metadata:
+          type: object
+          description: Additional metadata for the agent
+        last_seen:
+          type: string
+          format: date-time
+          description: The time the agent was last seen
+        created_at:
+          type: string
+          format: date-time
+          description: The time the agent was created
+        updated_at:
+          type: string
+          format: date-time
+          description: The time the agent was last updated
+      example:
+        agent_id: "agent-1234567890"
+        tenant_id: "tenant-1234567890"
+        name: "My Agent"
+        description: "A sample agent"
+        status: "online"
+        metadata: {"version": "1.0", "capabilities": ["text", "image"]}
+        last_seen: "2023-07-01T12:00:00Z"
+        created_at: "2023-06-01T12:00:00Z"
+        updated_at: "2023-07-01T12:00:00Z"
+    
+    AgentCreate:
+      type: object
+      description: Agent creation model
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: The agent name
+        description:
+          type: string
+          description: The agent description
+        metadata:
+          type: object
+          description: Additional metadata for the agent
+      example:
+        name: "My Agent"
+        description: "A sample agent"
+        metadata: {"version": "1.0", "capabilities": ["text", "image"]}
+    
+    AgentStatusUpdate:
+      type: object
+      description: Agent status update model
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [online, offline, idle, busy]
+          description: The new agent status
+      example:
+        status: "online"
+    
+    AgentResponse:
+      type: object
+      description: Agent response model
+      required:
+        - agent
+        - success
+      properties:
+        agent:
+          $ref: '#/components/schemas/Agent'
+        success:
+          type: boolean
+          description: Whether the operation was successful
+      example:
+        agent:
+          agent_id: "agent-1234567890"
+          tenant_id: "tenant-1234567890"
+          name: "My Agent"
+          description: "A sample agent"
+          status: "online"
+          metadata: {"version": "1.0", "capabilities": ["text", "image"]}
+          last_seen: "2023-07-01T12:00:00Z"
+          created_at: "2023-06-01T12:00:00Z"
+          updated_at: "2023-07-01T12:00:00Z"
+        success: true
+    
+    AgentsResponse:
+      type: object
+      description: Agents list response model
+      required:
+        - agents
+      properties:
+        agents:
+          type: array
+          description: The list of agents
+          items:
+            $ref: '#/components/schemas/Agent'
+        next_token:
+          type: string
+          description: The pagination token for the next page
+      example:
+        agents:
+          - agent_id: "agent-1234567890"
+            tenant_id: "tenant-1234567890"
+            name: "My Agent"
+            description: "A sample agent"
+            status: "online"
+            metadata: {"version": "1.0", "capabilities": ["text", "image"]}
+            last_seen: "2023-07-01T12:00:00Z"
+            created_at: "2023-06-01T12:00:00Z"
+            updated_at: "2023-07-01T12:00:00Z"
+        next_token: "next-page-token"
+    
+    # SSH key schemas
+    SSHKey:
+      type: object
+      description: SSH key model
+      required:
+        - key_id
+        - tenant_id
+        - name
+        - public_key
+        - fingerprint
+        - key_type
+      properties:
+        key_id:
+          type: string
+          description: The SSH key ID
+        tenant_id:
+          type: string
+          description: The tenant ID
+        name:
+          type: string
+          description: The SSH key name
+        public_key:
+          type: string
+          description: The public key in OpenSSH format
+        fingerprint:
+          type: string
+          description: The SSH key fingerprint
+        key_type:
+          type: string
+          enum: [access, agent, deployment]
+          description: The SSH key type
+        agent_id:
+          type: string
+          description: The agent ID (if key_type is 'agent')
+        status:
+          type: string
+          enum: [active, inactive]
+          description: The SSH key status
+        last_used:
+          type: string
+          format: date-time
+          description: The time the SSH key was last used
+        revoked:
+          type: boolean
+          description: Whether the SSH key is revoked
+        revoked_at:
+          type: string
+          format: date-time
+          description: The time the SSH key was revoked
+        revocation_reason:
+          type: string
+          description: The reason for revocation
+        created_at:
+          type: string
+          format: date-time
+          description: The time the SSH key was created
+        updated_at:
+          type: string
+          format: date-time
+          description: The time the SSH key was last updated
+      example:
+        key_id: "key-1234567890"
+        tenant_id: "tenant-1234567890"
+        name: "My SSH Key"
+        public_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC..."
+        fingerprint: "SHA256:abcdefghijklmnopqrstuvwxyz123456789"
+        key_type: "agent"
+        agent_id: "agent-1234567890"
+        status: "active"
+        last_used: "2023-07-01T12:00:00Z"
+        revoked: false
+        created_at: "2023-06-01T12:00:00Z"
+        updated_at: "2023-07-01T12:00:00Z"
+    
+    SSHKeyCreate:
+      type: object
+      description: SSH key creation model
+      required:
+        - name
+        - public_key
+        - key_type
+      properties:
+        name:
+          type: string
+          description: The SSH key name
+        public_key:
+          type: string
+          description: The public key in OpenSSH format
+        key_type:
+          type: string
+          enum: [access, agent, deployment]
+          description: The SSH key type
+        agent_id:
+          type: string
+          description: The agent ID (required if key_type is 'agent')
+        metadata:
+          type: object
+          description: Additional metadata for the SSH key
+      example:
+        name: "My SSH Key"
+        public_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC..."
+        key_type: "agent"
+        agent_id: "agent-1234567890"
+        metadata: {"purpose": "agent authentication"}
+    
+    SSHKeyRevoke:
+      type: object
+      description: SSH key revocation model
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          description: The reason for revocation
+      example:
+        reason: "Key compromised"
+    
+    SSHKeyResponse:
+      type: object
+      description: SSH key response model
+      required:
+        - key
+        - success
+      properties:
+        key:
+          $ref: '#/components/schemas/SSHKey'
+        success:
+          type: boolean
+          description: Whether the operation was successful
+      example:
+        key:
+          key_id: "key-1234567890"
+          tenant_id: "tenant-1234567890"
+          name: "My SSH Key"
+          public_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC..."
+          fingerprint: "SHA256:abcdefghijklmnopqrstuvwxyz123456789"
+          key_type: "agent"
+          agent_id: "agent-1234567890"
+          status: "active"
+          last_used: "2023-07-01T12:00:00Z"
+          revoked: false
+          created_at: "2023-06-01T12:00:00Z"
+          updated_at: "2023-07-01T12:00:00Z"
+        success: true
+    
+    SSHKeysResponse:
+      type: object
+      description: SSH keys list response model
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          description: The list of SSH keys
+          items:
+            $ref: '#/components/schemas/SSHKey'
+        next_token:
+          type: string
+          description: The pagination token for the next page
+      example:
+        keys:
+          - key_id: "key-1234567890"
+            tenant_id: "tenant-1234567890"
+            name: "My SSH Key"
+            public_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC..."
+            fingerprint: "SHA256:abcdefghijklmnopqrstuvwxyz123456789"
+            key_type: "agent"
+            agent_id: "agent-1234567890"
+            status: "active"
+            last_used: "2023-07-01T12:00:00Z"
+            revoked: false
+            created_at: "2023-06-01T12:00:00Z"
+            updated_at: "2023-07-01T12:00:00Z"
+        next_token: "next-page-token"
+    
+    # Channel schemas
+    Channel:
+      type: object
+      description: Channel model
+      required:
+        - channel_id
+        - tenant_id
+        - name
+      properties:
+        channel_id:
+          type: string
+          description: The channel ID
+        tenant_id:
+          type: string
+          description: The tenant ID
+        name:
+          type: string
+          description: The channel name
+        description:
+          type: string
+          description: The channel description
+        metadata:
+          type: object
+          description: Additional metadata for the channel
+        created_at:
+          type: string
+          format: date-time
+          description: The time the channel was created
+        updated_at:
+          type: string
+          format: date-time
+          description: The time the channel was last updated
+      example:
+        channel_id: "channel-1234567890"
+        tenant_id: "tenant-1234567890"
+        name: "General"
+        description: "General discussion channel"
+        metadata: {"type": "general", "public": true}
+        created_at: "2023-06-01T12:00:00Z"
+        updated_at: "2023-07-01T12:00:00Z"
+    
+    ChannelCreate:
+      type: object
+      description: Channel creation model
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: The channel name
+        description:
+          type: string
+          description: The channel description
+        metadata:
+          type: object
+          description: Additional metadata for the channel
+      example:
+        name: "General"
+        description: "General discussion channel"
+        metadata: {"type": "general", "public": true}
+    
+    ChannelResponse:
+      type: object
+      description: Channel response model
+      required:
+        - channel
+        - success
+      properties:
+        channel:
+          $ref: '#/components/schemas/Channel'
+        success:
+          type: boolean
+          description: Whether the operation was successful
+      example:
+        channel:
+          channel_id: "channel-1234567890"
+          tenant_id: "tenant-1234567890"
+          name: "General"
+          description: "General discussion channel"
+          metadata: {"type": "general", "public": true}
+          created_at: "2023-06-01T12:00:00Z"
+          updated_at: "2023-07-01T12:00:00Z"
+        success: true
+    
+    ChannelsResponse:
+      type: object
+      description: Channels list response model
+      required:
+        - channels
+      properties:
+        channels:
+          type: array
+          description: The list of channels
+          items:
+            $ref: '#/components/schemas/Channel'
+        next_token:
+          type: string
+          description: The pagination token for the next page
+      example:
+        channels:
+          - channel_id: "channel-1234567890"
+            tenant_id: "tenant-1234567890"
+            name: "General"
+            description: "General discussion channel"
+            metadata: {"type": "general", "public": true}
+            created_at: "2023-06-01T12:00:00Z"
+            updated_at: "2023-07-01T12:00:00Z"
+        next_token: "next-page-token"
+    
+    # Tenant schemas
+    Tenant:
+      type: object
+      description: Tenant model
+      required:
+        - tenant_id
+        - status
+      properties:
+        tenant_id:
+          type: string
+          description: The tenant ID
+        name:
+          type: string
+          description: The tenant name
+        status:
+          type: string
+          enum: [active, inactive, suspended, trial]
+          description: The tenant status
+        metadata:
+          type: object
+          description: Additional metadata for the tenant
+        payment_status:
+          type: string
+          enum: [trial, active, past_due, expired]
+          description: The tenant payment status
+        subscription_expires_at:
+          type: string
+          format: date-time
+          description: The expiration time of the tenant's subscription
+        last_payment_date:
+          type: string
+          format: date-time
+          description: The date of the tenant's last payment
+        payment_reference:
+          type: string
+          description: The payment reference
+        max_agents:
+          type: integer
+          description: The maximum number of agents allowed
+        max_channels:
+          type: integer
+          description: The maximum number of channels allowed
+        max_messages_per_day:
+          type: integer
+          description: The maximum number of messages allowed per day
+        created_at:
+          type: string
+          format: date-time
+          description: The time the tenant was created
+        updated_at:
+          type: string
+          format: date-time
+          description: The time the tenant was last updated
+      example:
+        tenant_id: "tenant-1234567890"
+        name: "My Company"
+        status: "active"
+        metadata: {"industry": "technology", "size": "small"}
+        payment_status: "active"
+        subscription_expires_at: "2024-01-01T00:00:00Z"
+        last_payment_date: "2023-06-01T12:00:00Z"
+        payment_reference: "payment-1234567890"
+        max_agents: 10
+        max_channels: 20
+        max_messages_per_day: 1000
+        created_at: "2023-06-01T12:00:00Z"
+        updated_at: "2023-07-01T12:00:00Z"
+    
+    TenantResponse:
+      type: object
+      description: Tenant response model
+      required:
+        - tenant
+        - success
+      properties:
+        tenant:
+          $ref: '#/components/schemas/Tenant'
+        success:
+          type: boolean
+          description: Whether the operation was successful
+      example:
+        tenant:
+          tenant_id: "tenant-1234567890"
+          name: "My Company"
+          status: "active"
+          metadata: {"industry": "technology", "size": "small"}
+          payment_status: "active"
+          subscription_expires_at: "2024-01-01T00:00:00Z"
+          last_payment_date: "2023-06-01T12:00:00Z"
+          payment_reference: "payment-1234567890"
+          max_agents: 10
+          max_channels: 20
+          max_messages_per_day: 1000
+          created_at: "2023-06-01T12:00:00Z"
+          updated_at: "2023-07-01T12:00:00Z"
+        success: true
+    
+    Subscription:
+      type: object
+      description: Subscription model
+      required:
+        - tenant_id
+        - tier
+        - status
+      properties:
+        tenant_id:
+          type: string
+          description: The tenant ID
+        tier:
+          type: string
+          enum: [free, basic, pro, enterprise]
+          description: The subscription tier
+        status:
+          type: string
+          enum: [trial, active, past_due, expired]
+          description: The subscription status
+        starts_at:
+          type: string
+          format: date-time
+          description: The start time of the subscription
+        expires_at:
+          type: string
+          format: date-time
+          description: The expiration time of the subscription
+        trial_ends_at:
+          type: string
+          format: date-time
+          description: The end time of the trial period
+        max_agents:
+          type: integer
+          description: The maximum number of agents allowed
+        max_channels:
+          type: integer
+          description: The maximum number of channels allowed
+        max_messages_per_day:
+          type: integer
+          description: The maximum number of messages allowed per day
+        created_at:
+          type: string
+          format: date-time
+          description: The time the subscription was created
+        updated_at:
+          type: string
+          format: date-time
+          description: The time the subscription was last updated
+      example:
+        tenant_id: "tenant-1234567890"
+        tier: "pro"
+        status: "active"
+        starts_at: "2023-06-01T12:00:00Z"
+        expires_at: "2024-01-01T00:00:00Z"
+        trial_ends_at: "2023-06-15T12:00:00Z"
+        max_agents: 10
+        max_channels: 20
+        max_messages_per_day: 1000
+        created_at: "2023-06-01T12:00:00Z"
+        updated_at: "2023-07-01T12:00:00Z"
+    
+    SubscriptionResponse:
+      type: object
+      description: Subscription response model
+      required:
+        - subscription
+        - success
+      properties:
+        subscription:
+          $ref: '#/components/schemas/Subscription'
+        success:
+          type: boolean
+          description: Whether the operation was successful
+      example:
+        subscription:
+          tenant_id: "tenant-1234567890"
+          tier: "pro"
+          status: "active"
+          starts_at: "2023-06-01T12:00:00Z"
+          expires_at: "2024-01-01T00:00:00Z"
+          trial_ends_at: "2023-06-15T12:00:00Z"
+          max_agents: 10
+          max_channels: 20
+          max_messages_per_day: 1000
+          created_at: "2023-06-01T12:00:00Z"
+          updated_at: "2023-07-01T12:00:00Z"
+        success: true
+    
+    # Usage metrics schemas
+    UsageMetrics:
+      type: object
+      description: Usage metrics model
+      required:
+        - tenant_id
+        - date
+      properties:
+        tenant_id:
+          type: string
+          description: The tenant ID
+        date:
+          type: string
+          format: date
+          description: The date of the metrics
+        agents_count:
+          type: integer
+          description: The number of agents
+        active_agents_count:
+          type: integer
+          description: The number of active agents
+        channels_count:
+          type: integer
+          description: The number of channels
+        active_channels_count:
+          type: integer
+          description: The number of active channels
+        messages_count:
+          type: integer
+          description: The number of messages
+        api_calls_count:
+          type: integer
+          description: The number of API calls
+        storage_used_bytes:
+          type: integer
+          description: The amount of storage used in bytes
+        created_at:
+          type: string
+          format: date-time
+          description: The time the metrics were created
+      example:
+        tenant_id: "tenant-1234567890"
+        date: "2023-06-01"
+        agents_count: 5
+        active_agents_count: 3
+        channels_count: 10
+        active_channels_count: 5
+        messages_count: 500
+        api_calls_count: 1000
+        storage_used_bytes: 1048576
+        created_at: "2023-06-01T12:00:00Z"
+    
+    UsageMetricsResponse:
+      type: object
+      description: Usage metrics response model
+      required:
+        - metrics
+        - success
+      properties:
+        metrics:
+          type: array
+          description: The usage metrics
+          items:
+            $ref: '#/components/schemas/UsageMetrics'
+        aggregates:
+          type: object
+          description: Aggregated metrics
+          properties:
+            total_agents:
+              type: integer
+              description: The total number of agents
+            total_channels:
+              type: integer
+              description: The total number of channels
+            total_messages:
+              type: integer
+              description: The total number of messages
+            total_api_calls:
+              type: integer
+              description: The total number of API calls
+            total_storage_used_bytes:
+              type: integer
+              description: The total amount of storage used in bytes
+        success:
+          type: boolean
+          description: Whether the operation was successful
+      example:
+        metrics:
+          - tenant_id: "tenant-1234567890"
+            date: "2023-06-01"
+            agents_count: 5
+            active_agents_count: 3
+            channels_count: 10
+            active_channels_count: 5
+            messages_count: 500
+            api_calls_count: 1000
+            storage_used_bytes: 1048576
+            created_at: "2023-06-01T12:00:00Z"
+        aggregates:
+          total_agents: 5
+          total_channels: 10
+          total_messages: 500
+          total_api_calls: 1000
+          total_storage_used_bytes: 1048576
+        success: true
+    
+    # Error schema
+    Error:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Error code
+        path:
+          type: string
+          description: Path to the erroneous field
+      example:
+        detail: "Invalid request"
+        code: "BAD_REQUEST"
+        path: "name"
+  
+  parameters:
+    limitParam:
+      name: limit
+      in: query
+      description: Maximum number of results to return
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    
+    nextTokenParam:
+      name: next_token
+      in: query
+      description: Pagination token for the next page
+      required: false
+      schema:
+        type: string
+  
+  responses:
+    BadRequestError:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            detail: "Invalid request"
+            code: "BAD_REQUEST"
+    
+    UnauthorizedError:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            detail: "Authentication required"
+            code: "UNAUTHORIZED"
+    
+    ForbiddenError:
+      description: Access denied
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            detail: "Access denied"
+            code: "FORBIDDEN"
+    
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            detail: "Resource not found"
+            code: "NOT_FOUND"
+  
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token authentication
+    
+    tenantAuth:
+      type: apiKey
+      in: header
+      name: x-tenant-id
+      description: Tenant ID header
