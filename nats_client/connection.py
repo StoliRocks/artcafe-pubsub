@@ -1,12 +1,13 @@
 import json
 import asyncio
 import logging
-from typing import Any, Optional, Dict, List, Callable, Awaitable
+from typing import Any, Optional, Dict, List, Callable, Awaitable, TYPE_CHECKING
 
 import nats
-# Fix import for newer nats-py versions (2.x+)
-from nats import NATS
-from nats.msg import Msg
+
+# For type hints
+if TYPE_CHECKING:
+    from nats.aio.msg import Msg
 
 from config.settings import settings
 
@@ -106,7 +107,7 @@ class NatsConnectionManager:
         
     async def subscribe(self, 
                       subject: str, 
-                      callback: Callable[[Msg], Awaitable[None]],
+                      callback: Callable[[Any], Awaitable[None]],
                       queue: Optional[str] = None):
         """Subscribe to NATS subject"""
         if not self._client or not self._client.is_connected:
