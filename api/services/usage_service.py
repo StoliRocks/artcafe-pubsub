@@ -110,7 +110,7 @@ class UsageService:
                 messages_count=0,
                 api_calls_count=0,
                 created_at=datetime.utcnow().isoformat()
-            )]")
+            )]
 
 
 # Singleton instance
