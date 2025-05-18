@@ -1,0 +1,68 @@
+{
+    "TableName": "artcafe-channel-subscriptions-dev",
+    "KeySchema": [
+        {
+            "AttributeName": "channel_id",
+            "KeyType": "HASH"
+        },
+        {
+            "AttributeName": "agent_id",
+            "KeyType": "RANGE"
+        }
+    ],
+    "AttributeDefinitions": [
+        {
+            "AttributeName": "channel_id",
+            "AttributeType": "S"
+        },
+        {
+            "AttributeName": "agent_id",
+            "AttributeType": "S"
+        },
+        {
+            "AttributeName": "tenant_id",
+            "AttributeType": "S"
+        }
+    ],
+    "GlobalSecondaryIndexes": [
+        {
+            "IndexName": "AgentIndex",
+            "KeySchema": [
+                {
+                    "AttributeName": "agent_id",
+                    "KeyType": "HASH"
+                },
+                {
+                    "AttributeName": "channel_id",
+                    "KeyType": "RANGE"
+                }
+            ],
+            "Projection": {
+                "ProjectionType": "ALL"
+            }
+        },
+        {
+            "IndexName": "TenantIndex",
+            "KeySchema": [
+                {
+                    "AttributeName": "tenant_id",
+                    "KeyType": "HASH"
+                },
+                {
+                    "AttributeName": "channel_id",
+                    "KeyType": "RANGE"
+                }
+            ],
+            "Projection": {
+                "ProjectionType": "ALL"
+            }
+        }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "Tags": [
+        {
+            "Key": "Environment",
+            "Value": "dev"
+        }
+    ]
+}

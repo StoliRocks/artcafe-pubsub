@@ -1,0 +1,37 @@
+[Unit]
+Description=ArtCafe PubSub API (Enhanced)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/artcafe/artcafe-pubsub
+Environment="PATH=/opt/artcafe/artcafe-pubsub/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PYTHONPATH=/opt/artcafe/artcafe-pubsub"
+ExecStart=/opt/artcafe/artcafe-pubsub/venv/bin/python -m api.app
+
+# Restart configuration
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Health check configuration
+ExecStartPost=/bin/sleep 5
+ExecStartPost=/usr/bin/curl -f http://localhost:8000/health || exit 1
+
+# Send notification on failure
+ExecStopPost=/usr/local/bin/send_service_notification.sh stopped
+ExecStopPost=-/usr/bin/systemctl restart artcafe-pubsub
+
+# Resource limits
+MemoryLimit=1G
+CPUQuota=80%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=artcafe-pubsub
+
+[Install]
+WantedBy=multi-user.target

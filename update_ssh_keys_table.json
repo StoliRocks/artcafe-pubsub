@@ -1,0 +1,25 @@
+{
+    "TableName": "artcafe-ssh-keys-dev",
+    "AttributeDefinitions": [
+        {
+            "AttributeName": "agent_id",
+            "AttributeType": "S"
+        }
+    ],
+    "GlobalSecondaryIndexUpdates": [
+        {
+            "Create": {
+                "IndexName": "AgentIndex",
+                "KeySchema": [
+                    {
+                        "AttributeName": "agent_id",
+                        "KeyType": "HASH"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                }
+            }
+        }
+    ]
+}

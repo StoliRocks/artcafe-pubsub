@@ -1,0 +1,1 @@
+{"errorMessage": "Unable to import module 'api.lambda_handler': No module named 'uvicorn'", "errorType": "Runtime.ImportModuleError", "requestId": "", "stackTrace": []}

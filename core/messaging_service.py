@@ -5,8 +5,10 @@ import asyncio
 from typing import Dict, Any, Callable, Optional, List, Union, Awaitable
 from datetime import datetime
 
-from nats.aio.msg import Msg
-from artcafe_pubsub.core.nats_client import NATSClient
+from nats.msg import Msg
+from nats.errors import AuthError
+from core.nats_client import NATSClient
+from core.nats_auth import nats_auth
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class MessagingService:
         message: Dict[str, Any],
         reply_to: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
+        tenant_id: Optional[str] = None,
     ) -> str:
         """
         Send a message to a subject.
@@ -46,10 +49,36 @@ class MessagingService:
             message: Message payload
             reply_to: Optional reply subject
             headers: Optional message headers
+            tenant_id: Optional tenant ID for authorization check
             
         Returns:
             Message ID
+            
+        Raises:
+            AuthError: If tenant is not authorized to publish to the subject
         """
+        # Validate tenant authorization if tenant_id is provided
+        if tenant_id:
+            nats_auth.validate_publish(tenant_id, subject)
+            
+            # Add tenant ID to headers if not already present
+            if headers is None:
+                headers = {}
+            if "tenant_id" not in headers:
+                headers["tenant_id"] = tenant_id
+        
+        # Extract tenant_id from subject if not explicitly provided
+        elif subject.startswith("tenants."):
+            # Parse tenant ID from subject (format: tenants.{tenant_id}.*)
+            parts = subject.split(".")
+            if len(parts) >= 2:
+                extracted_tenant_id = parts[1]
+                # Add to headers
+                if headers is None:
+                    headers = {}
+                if "tenant_id" not in headers:
+                    headers["tenant_id"] = extracted_tenant_id
+        
         # Add message metadata
         message_id = str(uuid.uuid4())
         enriched_message = {
@@ -71,6 +100,7 @@ class MessagingService:
         subject: str,
         callback: Callable[[Dict[str, Any]], Awaitable[None]],
         queue_group: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> None:
         """
         Subscribe to a subject and register a callback function.
@@ -79,7 +109,24 @@ class MessagingService:
             subject: Subject to subscribe to
             callback: Function to call when a message is received
             queue_group: Optional queue group for load balancing
+            tenant_id: Optional tenant ID for authorization check
+            
+        Raises:
+            AuthError: If tenant is not authorized to subscribe to the subject
         """
+        # Validate tenant authorization if tenant_id is provided
+        if tenant_id:
+            nats_auth.validate_subscribe(tenant_id, subject)
+        
+        # Extract tenant_id from subject if not explicitly provided
+        elif subject.startswith("tenants."):
+            # Parse tenant ID from subject (format: tenants.{tenant_id}.*)
+            parts = subject.split(".")
+            if len(parts) >= 2:
+                extracted_tenant_id = parts[1]
+                # Register tenant with NATS auth
+                nats_auth.register_tenant(extracted_tenant_id)
+        
         # Register message handler
         if subject not in self._handlers:
             self._handlers[subject] = []
@@ -91,6 +138,16 @@ class MessagingService:
             try:
                 # Parse JSON payload
                 payload = json.loads(msg.data.decode("utf-8"))
+                
+                # Extract tenant ID from headers if available
+                msg_tenant_id = None
+                if msg.headers and "tenant_id" in msg.headers:
+                    msg_tenant_id = msg.headers["tenant_id"]
+                
+                # If tenant ID is provided, validate that message is from the same tenant
+                if tenant_id and msg_tenant_id and tenant_id != msg_tenant_id:
+                    logger.warning(f"Tenant mismatch: expected {tenant_id}, got {msg_tenant_id}")
+                    return
                 
                 # Call all registered handlers
                 handlers = []
@@ -229,7 +286,7 @@ class MessagingService:
             Message ID
         """
         subject = self.create_channel_subject(tenant_id, channel_id)
-        return await self.send_message(subject, message, reply_to, headers)
+        return await self.send_message(subject, message, reply_to, headers, tenant_id)
     
     async def send_to_agent(
         self,
@@ -253,7 +310,7 @@ class MessagingService:
             Message ID
         """
         subject = self.create_agent_subject(tenant_id, agent_id)
-        return await self.send_message(subject, message, reply_to, headers)
+        return await self.send_message(subject, message, reply_to, headers, tenant_id)
     
     async def subscribe_to_channel(
         self,
@@ -272,7 +329,7 @@ class MessagingService:
             queue_group: Optional queue group for load balancing
         """
         subject = self.create_channel_subject(tenant_id, channel_id)
-        await self.subscribe(subject, callback, queue_group)
+        await self.subscribe(subject, callback, queue_group, tenant_id)
     
     async def subscribe_to_agent(
         self,
@@ -291,7 +348,7 @@ class MessagingService:
             queue_group: Optional queue group for load balancing
         """
         subject = self.create_agent_subject(tenant_id, agent_id)
-        await self.subscribe(subject, callback, queue_group)
+        await self.subscribe(subject, callback, queue_group, tenant_id)
     
     async def subscribe_to_tenant(
         self,
@@ -308,7 +365,7 @@ class MessagingService:
             queue_group: Optional queue group for load balancing
         """
         subject = f"tenants.{tenant_id}.>"
-        await self.subscribe(subject, callback, queue_group)
+        await self.subscribe(subject, callback, queue_group, tenant_id)
     
     def _subject_matches(self, pattern: str, subject: str) -> bool:
         """

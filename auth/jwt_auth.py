@@ -7,46 +7,34 @@ from datetime import datetime, timedelta
 from fastapi import Request, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+from auth.jwt_handler import decode_token, create_access_token, validate_cognito_token
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
+
 
 class JWTAuth:
     """
-    JWT authentication service.
+    JWT authentication service that supports both internal (HS256) and Cognito (RS256) tokens.
     """
     
-    def __init__(
-        self,
-        secret_key: Optional[str] = None,
-        algorithm: str = 'HS256',
-        token_expiration: int = 86400,  # 24 hours in seconds
-        audience: Optional[str] = None,
-        issuer: Optional[str] = None
-    ):
+    def __init__(self):
         """
-        Initialize JWT authentication service.
-        
-        Args:
-            secret_key: Secret key for JWT signing
-            algorithm: JWT algorithm
-            token_expiration: Token expiration time in seconds
-            audience: Token audience
-            issuer: Token issuer
+        Initialize JWT authentication service using settings.
         """
-        self.secret_key = secret_key or os.getenv('JWT_SECRET_KEY')
-        if not self.secret_key:
-            raise ValueError("JWT secret key must be provided")
-        
-        self.algorithm = algorithm
-        self.token_expiration = token_expiration
-        self.audience = audience or os.getenv('JWT_AUDIENCE', 'artcafe-api')
-        self.issuer = issuer or os.getenv('JWT_ISSUER', 'artcafe-auth')
+        self.secret_key = settings.JWT_SECRET_KEY
+        self.algorithm = settings.JWT_ALGORITHM
+        self.algorithms = settings.JWT_ALGORITHMS
+        self.token_expiration = settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        self.audience = settings.COGNITO_CLIENT_ID
+        self.issuer = settings.COGNITO_ISSUER
         
         # OAuth2 security scheme
         self.security = HTTPBearer()
     
     def create_token(self, subject: str, tenant_id: str, payload: Optional[Dict[str, Any]] = None) -> str:
         """
-        Create a JWT token.
+        Create a JWT token (internal use).
         
         Args:
             subject: Token subject (usually user ID)
@@ -56,26 +44,22 @@ class JWTAuth:
         Returns:
             JWT token
         """
-        now = int(time.time())
-        
         # Create token payload
-        token_payload = {
+        token_data = {
             'sub': subject,
             'tenant_id': tenant_id,
-            'iat': now,
-            'exp': now + self.token_expiration,
-            'aud': self.audience,
-            'iss': self.issuer
+            'user_id': subject,  # Add user_id for compatibility
         }
         
         # Add additional payload data
         if payload:
-            token_payload.update(payload)
+            token_data.update(payload)
         
-        # Create token
-        token = jwt.encode(token_payload, self.secret_key, algorithm=self.algorithm)
-        
-        return token
+        # Create token using the handler
+        return create_access_token(
+            data=token_data,
+            expires_delta=timedelta(seconds=self.token_expiration)
+        )
     
     def create_agent_token(
         self,
@@ -99,19 +83,27 @@ class JWTAuth:
         # Create token payload
         payload = {
             'agent_id': agent_id,
-            'scopes': scopes or 'agent:pubsub'
+            'scopes': scopes or 'agent:pubsub',
+            'token_type': 'agent'
         }
         
         # Use custom expiration if provided
+        expires_delta = None
         if expiration:
-            now = int(time.time())
-            payload['exp'] = now + expiration
+            expires_delta = timedelta(seconds=expiration)
         
-        return self.create_token(agent_id, tenant_id, payload)
+        return create_access_token(
+            data={
+                'sub': agent_id,
+                'tenant_id': tenant_id,
+                **payload
+            },
+            expires_delta=expires_delta
+        )
     
     def verify_token(self, token: str) -> Dict[str, Any]:
         """
-        Verify a JWT token.
+        Verify a JWT token (supports both HS256 and RS256).
         
         Args:
             token: JWT token
@@ -120,17 +112,21 @@ class JWTAuth:
             Token payload
             
         Raises:
-            jwt.InvalidTokenError: If token is invalid
+            HTTPException: If token is invalid
         """
         try:
-            # Decode and verify token
-            payload = jwt.decode(
-                token,
-                self.secret_key,
-                algorithms=[self.algorithm],
-                audience=self.audience,
-                issuer=self.issuer
-            )
+            # Use the centralized decode_token which handles both algorithms
+            payload = decode_token(token)
+            
+            # For Cognito tokens, do additional validation
+            header = jwt.get_unverified_header(token)
+            if header.get('alg') == 'RS256':
+                # This is a Cognito token, validate it fully
+                payload = validate_cognito_token(token)
+                
+                # Map Cognito claims to our expected format
+                payload['tenant_id'] = payload.get('custom:tenant_id') or payload.get('tenant_id')
+                payload['user_id'] = payload.get('cognito:username') or payload.get('sub')
             
             return payload
         
@@ -138,8 +134,12 @@ class JWTAuth:
             logger.warning("Token has expired")
             raise HTTPException(status_code=401, detail="Token has expired")
         
-        except jwt.InvalidTokenError as e:
+        except jwt.PyJWTError as e:
             logger.warning(f"Invalid token: {e}")
+            raise HTTPException(status_code=401, detail=str(e))
+        
+        except Exception as e:
+            logger.error(f"Token verification error: {e}")
             raise HTTPException(status_code=401, detail="Invalid token")
     
     async def verify_auth_header(self, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())) -> Dict[str, Any]:

@@ -1,0 +1,67 @@
+import os
+from typing import List, Optional
+from pydantic import Field
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    """Application settings"""
+    # App settings
+    APP_NAME: str = "ArtCafe PubSub Service"
+    APP_VERSION: str = "0.1.0"
+    API_VERSION: str = "v1"
+    DEBUG: bool = Field(default=False)
+    
+    # API settings
+    API_PREFIX: str = "/api/v1"
+    
+    # CORS settings
+    CORS_ORIGINS: List[str] = Field(default=["*"])
+    CORS_METHODS: List[str] = Field(default=["*"])
+    CORS_HEADERS: List[str] = Field(default=["*"])
+    
+    # JWT settings
+    JWT_SECRET_KEY: str = Field(default="super-secret-key", env="JWT_SECRET_KEY")
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
+    
+    # NATS settings
+    NATS_SERVERS: List[str] = Field(default=["nats://ec2-3-239-238-118.compute-1.amazonaws.com:4222"])
+    NATS_USERNAME: Optional[str] = None
+    NATS_PASSWORD: Optional[str] = None
+    NATS_TOKEN: Optional[str] = None
+    NATS_TLS_ENABLED: bool = False
+    NATS_TLS_CERT_PATH: Optional[str] = None
+    NATS_TLS_KEY_PATH: Optional[str] = None
+    NATS_TLS_CA_PATH: Optional[str] = None
+    
+    # AWS Settings
+    AWS_REGION: str = Field(default="us-east-1")
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    
+    # DynamoDB settings
+    DYNAMODB_TABLE_PREFIX: str = "artcafe_"
+    DYNAMODB_ENDPOINT: Optional[str] = None
+    AGENT_TABLE_NAME: str = Field(default="artcafe-agents-dev")
+    SSH_KEY_TABLE_NAME: str = Field(default="artcafe-ssh-keys-dev")
+    CHANNEL_TABLE_NAME: str = Field(default="artcafe-channels-dev")
+    TENANT_TABLE_NAME: str = Field(default="artcafe-tenants-dev")
+    USAGE_METRICS_TABLE_NAME: str = Field(default="artcafe-usage-metrics-dev")
+    
+    # API Key settings
+    API_KEY_HEADER_NAME: str = Field(default="x-api-key")
+    TENANT_ID_HEADER_NAME: str = Field(default="x-tenant-id")
+    
+    # Default tenant settings
+    DEFAULT_TENANT_ID: str = Field(default="tenant-default")
+    
+    # Other settings
+    LOG_LEVEL: str = Field(default="INFO")
+    ENVIRONMENT: str = Field(default="dev")
+    
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = True
+        
+settings = Settings()

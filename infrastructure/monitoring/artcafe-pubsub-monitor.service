@@ -1,0 +1,14 @@
+[Unit]
+Description=ArtCafe PubSub API Monitor
+After=artcafe-pubsub.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bash /opt/artcafe/artcafe-pubsub/monitor.sh
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

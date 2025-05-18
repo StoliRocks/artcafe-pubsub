@@ -46,6 +46,9 @@ class MetricsService:
         self.active_agents: Dict[str, Set[str]] = {}  # tenant_id -> set of agent_ids
         self.active_channels: Dict[str, Set[str]] = {}  # tenant_id -> set of channel_ids
         
+        # Active connections by tenant
+        self.connections: Dict[str, int] = {}  # tenant_id -> connection count
+        
         # Background tasks
         self.collection_task = None
         self.flush_task = None
@@ -239,7 +242,7 @@ class MetricsService:
                 tenant_metrics["channels"]["active"] = len(self.active_channels.get(tenant_id, set()))
             
             # Get NATS message stats
-            from nats import nats_manager
+            from nats_client import nats_manager
             
             stats = await nats_manager.get_stats()
             if stats:
@@ -403,6 +406,42 @@ class MetricsService:
         
         except Exception as e:
             logger.error(f"Error setting metric: {e}")
+    
+    def update_tenant_connection(self, tenant_id: str, delta: int = 1) -> None:
+        """
+        Update the connection count for a tenant.
+        
+        Args:
+            tenant_id: Tenant ID
+            delta: Amount to change connection count by (+1 for new connection, -1 for disconnection)
+        """
+        try:
+            if tenant_id not in self.connections:
+                self.connections[tenant_id] = 0
+                
+            self.connections[tenant_id] += delta
+            
+            # Ensure connection count doesn't go below 0
+            if self.connections[tenant_id] < 0:
+                self.connections[tenant_id] = 0
+                
+            # Update the metric
+            self.set_metric(tenant_id, "connections", "active", self.connections[tenant_id])
+            logger.debug(f"Updated connection count for tenant {tenant_id}: {self.connections[tenant_id]}")
+        except Exception as e:
+            logger.error(f"Error updating tenant connection: {e}")
+            
+    def get_tenant_connection_count(self, tenant_id: str) -> int:
+        """
+        Get the current connection count for a tenant.
+        
+        Args:
+            tenant_id: Tenant ID
+            
+        Returns:
+            Current connection count
+        """
+        return self.connections.get(tenant_id, 0)
     
     async def get_metrics(
         self,

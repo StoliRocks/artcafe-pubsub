@@ -1,0 +1,233 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ArtCafe PubSub API Monitoring Stack'
+
+Parameters:
+  APIEndpoint:
+    Type: String
+    Default: http://3.229.1.223:8000
+    Description: API endpoint to monitor
+  
+  NotificationEmail:
+    Type: String
+    Description: Email address for alert notifications
+  
+  NotificationPhone:
+    Type: String
+    Default: ""
+    Description: Phone number for SMS alerts (optional)
+
+Resources:
+  # SNS Topic for Alerts
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: artcafe-pubsub-alerts
+      DisplayName: ArtCafe PubSub Alerts
+      Subscription:
+        - Endpoint: !Ref NotificationEmail
+          Protocol: email
+        - !If
+          - HasPhoneNumber
+          - Endpoint: !Ref NotificationPhone
+            Protocol: sms
+          - !Ref "AWS::NoValue"
+
+  # CloudWatch Synthetics Canary
+  HealthCheckCanary:
+    Type: AWS::Synthetics::Canary
+    Properties:
+      Name: artcafe-pubsub-health
+      RuntimeVersion: syn-python-selenium-1.0
+      ArtifactS3Location: !Sub 's3://${CanaryBucket}/canary-artifacts'
+      ExecutionRoleArn: !GetAtt CanaryExecutionRole.Arn
+      Schedule:
+        Expression: rate(1 minute)
+      RunConfig:
+        TimeoutInSeconds: 120
+        EnvironmentVariables:
+          API_ENDPOINT: !Ref APIEndpoint
+      FailureRetentionPeriod: 30
+      SuccessRetentionPeriod: 7
+      Code:
+        Handler: canary.handler
+        S3Bucket: !Ref CanaryBucket
+        S3Key: health-check-canary.zip
+
+  # S3 Bucket for Canary Artifacts
+  CanaryBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'artcafe-canary-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # IAM Role for Canary
+  CanaryExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchSyntheticsFullAccess
+      Policies:
+        - PolicyName: CanaryS3Policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub '${CanaryBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt CanaryBucket.Arn
+
+  # CloudWatch Alarms
+  HealthCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: artcafe-pubsub-health-check-failed
+      AlarmDescription: API health check failed
+      MetricName: Failed
+      Namespace: CloudWatchSynthetics
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref AlertTopic
+      Dimensions:
+        - Name: CanaryName
+          Value: !Ref HealthCheckCanary
+
+  APIResponseTimeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: artcafe-pubsub-slow-response
+      AlarmDescription: API response time is too high
+      MetricName: Duration
+      Namespace: CloudWatchSynthetics
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5000  # 5 seconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+      Dimensions:
+        - Name: CanaryName
+          Value: !Ref HealthCheckCanary
+
+  # Log Group for Application Logs
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/ec2/artcafe-pubsub
+      RetentionInDays: 7
+
+  # Metric Filter for Error Logs
+  ErrorLogMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      FilterName: artcafe-pubsub-errors
+      FilterPattern: '[timestamp, request_id, log_level=ERROR*, ...]'
+      LogGroupName: !Ref ApplicationLogGroup
+      MetricTransformations:
+        - MetricName: ErrorCount
+          MetricNamespace: ArtCafePubSub
+          MetricValue: "1"
+          DefaultValue: 0
+
+  # Alarm for High Error Rate
+  ErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: artcafe-pubsub-high-error-rate
+      AlarmDescription: High error rate detected
+      MetricName: ErrorCount
+      Namespace: ArtCafePubSub
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # Dashboard
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: artcafe-pubsub-monitoring
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  ["CloudWatchSynthetics", "Failed", "CanaryName", "${HealthCheckCanary}"],
+                  [".", "Success", ".", "."]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "Health Check Status"
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  ["CloudWatchSynthetics", "Duration", "CanaryName", "${HealthCheckCanary}"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "API Response Time"
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  ["ArtCafePubSub", "ErrorCount"]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "Error Count"
+              }
+            }
+          ]
+        }
+
+Conditions:
+  HasPhoneNumber: !Not [!Equals [!Ref NotificationPhone, ""]]
+
+Outputs:
+  DashboardURL:
+    Description: CloudWatch Dashboard URL
+    Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${MonitoringDashboard}'
+  
+  AlertTopicArn:
+    Description: SNS Topic ARN for alerts
+    Value: !Ref AlertTopic

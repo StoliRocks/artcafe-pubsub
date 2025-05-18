@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidSignature
 
-from api.services.ssh_key_service import ssh_key_service
+# Imported at usage point to avoid circular import
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +261,7 @@ class SSHKeyManager:
                 return False
 
             # Get the SSH key
+            from api.services.ssh_key_service import ssh_key_service
             ssh_key = await ssh_key_service.get_ssh_key(tenant_id, key_id)
             if not ssh_key:
                 logger.warning(f"SSH key {key_id} not found")
@@ -303,6 +304,7 @@ class SSHKeyManager:
                 await challenge_store.delete_challenge(tenant_id, challenge)
                 
                 # Update last_used timestamp
+                from api.services.ssh_key_service import ssh_key_service
                 await ssh_key_service.update_ssh_key_usage(tenant_id, key_id)
 
             return valid

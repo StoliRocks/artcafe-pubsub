@@ -1,0 +1,483 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ArtCafe.ai PubSub Service Infrastructure - Ubuntu 24.04 Edition'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Deployment environment
+    
+  NATSInstanceType:
+    Type: String
+    Default: t4g.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
+    Description: EC2 instance type for NATS server
+
+  APIInstanceType:
+    Type: String
+    Default: t4g.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
+    Description: EC2 instance type for API server
+    
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+
+# Mappings to ensure correct Ubuntu 24.04 AMI based on region and architecture
+Mappings:
+  RegionArch2AMI:
+    us-east-1:
+      amd64: ami-05c17b22914ce7378  # Ubuntu 24.04 LTS x86_64 in us-east-1
+      arm64: ami-062717d9ed2d9ee1b  # Ubuntu 24.04 LTS arm64 in us-east-1
+    us-east-2:
+      amd64: ami-0866a04d72a1f5479
+      arm64: ami-0a45c84a844063df4
+    us-west-1:
+      amd64: ami-0ff49bcd3f3d97ecd
+      arm64: ami-04a28e540b9b1c0e0
+    us-west-2:
+      amd64: ami-03f65b8614a860c29
+      arm64: ami-0400d3e4e5188e2e3
+    eu-west-1:
+      amd64: ami-020737107c4c26aec
+      arm64: ami-005b11b602b0b1759
+    eu-central-1: 
+      amd64: ami-0a3bb9cce6c0da6dc
+      arm64: ami-02e99b244f562e6d4
+      
+Conditions:
+  IsNATSArm: !Or [!Equals [!Ref NATSInstanceType, 't4g.nano'], !Equals [!Ref NATSInstanceType, 't4g.micro'], !Equals [!Ref NATSInstanceType, 't4g.small']]
+  IsAPIArm: !Or [!Equals [!Ref APIInstanceType, 't4g.nano'], !Equals [!Ref APIInstanceType, 't4g.micro'], !Equals [!Ref APIInstanceType, 't4g.small']]
+
+Resources:
+  # VPC and Networking
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-vpc-${Environment}
+  
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-public-subnet-1-${Environment}
+  
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-public-subnet-2-${Environment}
+  
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-igw-${Environment}
+  
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-public-rt-${Environment}
+  
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+      
+  # Security Groups
+  NATSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for NATS server
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 4222
+          ToPort: 4222
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8222
+          ToPort: 8222
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-nats-sg-${Environment}
+  
+  APISecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for API server
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-api-sg-${Environment}
+          
+  # DynamoDB Tables
+  AgentTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub artcafe-agents-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  SSHKeyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub artcafe-ssh-keys-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  ChannelTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub artcafe-channels-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  TenantTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub artcafe-tenants-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  UsageMetricsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub artcafe-usage-metrics-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: date
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # IAM Roles
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+          
+  # EC2 Instances
+  NATSServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref NATSInstanceType
+      SecurityGroupIds:
+        - !Ref NATSSecurityGroup
+      SubnetId: !Ref PublicSubnet1
+      ImageId: !If
+        - IsNATSArm
+        - !FindInMap [RegionArch2AMI, !Ref "AWS::Region", arm64]
+        - !FindInMap [RegionArch2AMI, !Ref "AWS::Region", amd64]
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-nats-${Environment}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update && apt-get upgrade -y
+          
+          # Install Docker
+          apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+          apt-get update
+          apt-get install -y docker-ce docker-ce-cli containerd.io
+          systemctl start docker
+          systemctl enable docker
+          
+          # Pull and run NATS
+          docker pull nats:latest
+          docker run -d --name nats --restart always -p 4222:4222 -p 8222:8222 nats:latest
+          
+          # Add CloudWatch agent for monitoring
+          wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/$(dpkg --print-architecture)/latest/amazon-cloudwatch-agent.deb
+          dpkg -i amazon-cloudwatch-agent.deb
+          rm amazon-cloudwatch-agent.deb
+          
+  APIServer:
+    Type: AWS::EC2::Instance
+    DependsOn: NATSServer
+    Properties:
+      InstanceType: !Ref APIInstanceType
+      SecurityGroupIds:
+        - !Ref APISecurityGroup
+      SubnetId: !Ref PublicSubnet2
+      ImageId: !If
+        - IsAPIArm
+        - !FindInMap [RegionArch2AMI, !Ref "AWS::Region", arm64]
+        - !FindInMap [RegionArch2AMI, !Ref "AWS::Region", amd64]
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-api-${Environment}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update && apt-get upgrade -y
+          
+          # Install Python and dependencies
+          apt-get install -y python3 python3-pip python3-venv git
+          
+          # Install Docker (optional, for development)
+          apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+          apt-get update
+          apt-get install -y docker-ce docker-ce-cli containerd.io
+          systemctl start docker
+          systemctl enable docker
+          
+          # Set up application directory
+          mkdir -p /opt/artcafe/artcafe-pubsub
+          
+          # Create ubuntu user if it doesn't exist and add to appropriate groups
+          if ! id ubuntu &>/dev/null; then
+            useradd -m -s /bin/bash ubuntu
+          fi
+          usermod -aG docker ubuntu
+          
+          # Set up application directory with proper permissions
+          mkdir -p /opt/artcafe/artcafe-pubsub
+          chown -R ubuntu:ubuntu /opt/artcafe
+          
+          # Create .env file
+          cat > /opt/artcafe/artcafe-pubsub/.env << EOL
+          DEBUG=False
+          JWT_SECRET_KEY=${AWS::StackName}
+          NATS_SERVERS=["nats://${NATSServer.PrivateIp}:4222"]
+          AGENT_TABLE_NAME=${AgentTable}
+          SSH_KEY_TABLE_NAME=${SSHKeyTable}
+          CHANNEL_TABLE_NAME=${ChannelTable}
+          TENANT_TABLE_NAME=${TenantTable}
+          USAGE_METRICS_TABLE_NAME=${UsageMetricsTable}
+          EOL
+          
+          # Set up the service
+          cat > /etc/systemd/system/artcafe-pubsub.service << EOL
+          [Unit]
+          Description=ArtCafe PubSub API
+          After=network.target
+          
+          [Service]
+          User=ubuntu
+          WorkingDirectory=/opt/artcafe/artcafe-pubsub
+          ExecStart=/usr/bin/python3 -m api.app
+          Restart=always
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOL
+          
+          # Install CloudWatch agent for monitoring
+          wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/$(dpkg --print-architecture)/latest/amazon-cloudwatch-agent.deb
+          dpkg -i amazon-cloudwatch-agent.deb
+          rm amazon-cloudwatch-agent.deb
+          
+  # Elastic IP for API
+  APIEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref APIServer
+      Tags:
+        - Key: Name
+          Value: !Sub artcafe-pubsub-api-eip-${Environment}
+          
+Outputs:
+  VPCID:
+    Description: VPC ID
+    Value: !Ref VPC
+    
+  PublicSubnet1:
+    Description: Public Subnet 1
+    Value: !Ref PublicSubnet1
+    
+  PublicSubnet2:
+    Description: Public Subnet 2
+    Value: !Ref PublicSubnet2
+    
+  NATSServerIP:
+    Description: NATS Server IP
+    Value: !GetAtt NATSServer.PublicIp
+    
+  APIServerIP:
+    Description: API Server IP
+    Value: !Ref APIEIP
+    
+  APIServerURL:
+    Description: API Server URL
+    Value: !Sub http://${APIEIP}:8000
+    
+  AgentTableName:
+    Description: Agent DynamoDB Table
+    Value: !Ref AgentTable
+    
+  SSHKeyTableName:
+    Description: SSH Key DynamoDB Table
+    Value: !Ref SSHKeyTable
+    
+  ChannelTableName:
+    Description: Channel DynamoDB Table
+    Value: !Ref ChannelTable
+    
+  TenantTableName:
+    Description: Tenant DynamoDB Table
+    Value: !Ref TenantTable
+    
+  UsageMetricsTableName:
+    Description: Usage Metrics DynamoDB Table
+    Value: !Ref UsageMetricsTable

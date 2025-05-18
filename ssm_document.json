@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.2",
+  "description": "Update artcafe-pubsub API service",
+  "parameters": {},
+  "runtimeConfig": {
+    "aws:runShellScript": {
+      "properties": [
+        {
+          "id": "0.aws:runShellScript",
+          "runCommand": [
+            "#!/bin/bash",
+            "aws s3 cp s3://artcafe-deployments/deploy_package.zip /tmp/deploy_package.zip",
+            "sudo su -",
+            "cd /opt/artcafe/artcafe-pubsub",
+            "unzip -o /tmp/deploy_package.zip",
+            "chown -R ec2-user:ec2-user /opt/artcafe",
+            "systemctl restart artcafe-pubsub"
+          ]
+        }
+      ]
+    }
+  }
+}

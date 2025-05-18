@@ -13,7 +13,16 @@ from .tenant import (
 from .usage_metrics import (
     UsageMetrics, UsageMetricsResponse, DailyUsage, UsageTotal, UsageLimits
 )
+from .channel_subscription import (
+    ChannelSubscription, ChannelSubscriptionCreate, ChannelSubscriptionUpdate, 
+    ChannelSubscriptionResponse, ChannelSubscriptionsResponse, SubscriptionRole
+)
+from .user_tenant import (
+    UserTenant, UserTenantCreate, UserTenantUpdate, UserRole,
+    UserWithTenants, TenantWithUsers
+)
 from .base import BaseSchema
+from .tenant_limits import TenantLimits, TenantUsage, SubscriptionPlan, SUBSCRIPTION_PLANS
 
 __all__ = [
     "Agent", "AgentCreate", "AgentUpdate", "AgentResponse", "AgentsResponse", "AgentMetadata",
@@ -21,5 +30,10 @@ __all__ = [
     "Channel", "ChannelCreate", "ChannelResponse", "ChannelsResponse",
     "Tenant", "TenantCreate", "TenantResponse",
     "UsageMetrics", "UsageMetricsResponse", "DailyUsage", "UsageTotal", "UsageLimits",
-    "BaseSchema"
+    "ChannelSubscription", "ChannelSubscriptionCreate", "ChannelSubscriptionUpdate",
+    "ChannelSubscriptionResponse", "ChannelSubscriptionsResponse", "SubscriptionRole",
+    "UserTenant", "UserTenantCreate", "UserTenantUpdate", "UserRole",
+    "UserWithTenants", "TenantWithUsers",
+    "BaseSchema",
+    "TenantLimits", "TenantUsage", "SubscriptionPlan", "SUBSCRIPTION_PLANS"
 ]

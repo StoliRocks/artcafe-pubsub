@@ -18,8 +18,11 @@ Parameters:
       - t3.micro
       - t3.small
       - t3.medium
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
     Description: EC2 instance type for NATS server
-    
+
   APIInstanceType:
     Type: String
     Default: t3.small
@@ -27,6 +30,9 @@ Parameters:
       - t3.micro
       - t3.small
       - t3.medium
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
     Description: EC2 instance type for API server
     
   KeyName:
@@ -187,11 +193,22 @@ Resources:
           AttributeType: S
         - AttributeName: id
           AttributeType: S
+        - AttributeName: agent_id
+          AttributeType: S
       KeySchema:
         - AttributeName: tenant_id
           KeyType: HASH
         - AttributeName: id
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: AgentIndex
+          KeySchema:
+            - AttributeName: agent_id
+              KeyType: HASH
+            - AttributeName: id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -249,6 +266,91 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
           
+  ChannelSubscriptionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub artcafe-channel-subscriptions-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: channel_id
+          AttributeType: S
+        - AttributeName: agent_id
+          AttributeType: S
+        - AttributeName: tenant_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: channel_id
+          KeyType: HASH
+        - AttributeName: agent_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: AgentIndex
+          KeySchema:
+            - AttributeName: agent_id
+              KeyType: HASH
+            - AttributeName: channel_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: TenantIndex
+          KeySchema:
+            - AttributeName: tenant_id
+              KeyType: HASH
+            - AttributeName: channel_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
+  # Terms Acceptance Table
+  TermsAcceptanceTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub artcafe-terms-acceptance-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: terms_version
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserIndex
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: TenantIndex
+          KeySchema:
+            - AttributeName: tenant_id
+              KeyType: HASH
+            - AttributeName: user_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: VersionIndex
+          KeySchema:
+            - AttributeName: terms_version
+              KeyType: HASH
+            - AttributeName: user_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+          
   # IAM Roles
   EC2Role:
     Type: AWS::IAM::Role
@@ -274,14 +376,89 @@ Resources:
         - !Ref EC2Role
           
   # EC2 Instances
+  # AMI Mapping based on instance type
+  InstanceAMI:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.8
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import cfnresponse
+          import boto3
+
+          def handler(event, context):
+            if event['RequestType'] == 'Delete':
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              return
+
+            instance_type = event['ResourceProperties']['InstanceType']
+            region = event['ResourceProperties']['Region']
+
+            # Determine architecture based on instance type
+            arch = 'arm64' if instance_type.startswith('t4g') else 'x86_64'
+
+            # Get latest Amazon Linux 2 AMI
+            ec2 = boto3.client('ec2', region_name=region)
+            response = ec2.describe_images(
+              Owners=['amazon'],
+              Filters=[
+                {'Name': 'name', 'Values': ['amzn2-ami-hvm-*']},
+                {'Name': 'architecture', 'Values': [arch]},
+                {'Name': 'root-device-type', 'Values': ['ebs']},
+                {'Name': 'virtualization-type', 'Values': ['hvm']},
+                {'Name': 'state', 'Values': ['available']}
+              ],
+              SortBy='CreationDate',
+              MaxResults=1
+            )
+
+            ami_id = response['Images'][0]['ImageId'] if response['Images'] else ''
+
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+              'AMI': ami_id
+            }, ami_id)
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EC2Permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeImages
+                Resource: '*'
+
+  NATSServerAMI:
+    Type: Custom::AMILookup
+    Properties:
+      ServiceToken: !GetAtt InstanceAMI.Arn
+      InstanceType: !Ref NATSInstanceType
+      Region: !Ref "AWS::Region"
+
   NATSServer:
     Type: AWS::EC2::Instance
+    DependsOn: NATSServerAMI
     Properties:
       InstanceType: !Ref NATSInstanceType
       SecurityGroupIds:
         - !Ref NATSSecurityGroup
       SubnetId: !Ref PublicSubnet1
-      ImageId: ami-0f8e81a3da6e2510a  # Amazon Linux 2 AMI
+      ImageId: !GetAtt NATSServerAMI.AMI
       KeyName: !Ref KeyName
       IamInstanceProfile: !Ref EC2InstanceProfile
       Tags:
@@ -349,6 +526,7 @@ Resources:
           CHANNEL_TABLE_NAME=${ChannelTable}
           TENANT_TABLE_NAME=${TenantTable}
           USAGE_METRICS_TABLE_NAME=${UsageMetricsTable}
+          CHANNEL_SUBSCRIPTIONS_TABLE_NAME=${ChannelSubscriptionsTable}
           EOL
           
           # Install dependencies

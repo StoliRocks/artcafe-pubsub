@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Update artcafe-pubsub API service on Ubuntu",
+  "parameters": {},
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "updateArtCafePubSub",
+      "inputs": {
+        "runCommand": [
+          "#!/bin/bash",
+          "# Create app directories if they don't exist",
+          "if [ ! -d \"/opt/artcafe/artcafe-pubsub\" ]; then",
+          "    mkdir -p /opt/artcafe/artcafe-pubsub",
+          "fi",
+          "",
+          "# Install AWS CLI if not available",
+          "if ! command -v aws &> /dev/null; then",
+          "    apt-get update",
+          "    apt-get install -y awscli",
+          "fi",
+          "",
+          "# Install unzip if not available",
+          "if ! command -v unzip &> /dev/null; then",
+          "    apt-get update",
+          "    apt-get install -y unzip",
+          "fi",
+          "",
+          "# Download deployment package from S3",
+          "aws s3 cp s3://artcafe-deployments/deploy_package.zip /tmp/deploy_package.zip",
+          "",
+          "# Extract and deploy to the application directory",
+          "cd /tmp",
+          "unzip -o deploy_package.zip -d /tmp/app_extract",
+          "cp -R /tmp/app_extract/* /opt/artcafe/artcafe-pubsub/",
+          "chown -R ubuntu:ubuntu /opt/artcafe",
+          "",
+          "# Check what service names are available",
+          "SERVICES=$(systemctl list-units --type=service | grep -E 'artcafe|pubsub')",
+          "if [ -n \"$SERVICES\" ]; then",
+          "    echo \"Found services: $SERVICES\"",
+          "    # Restart services that match our pattern",
+          "    systemctl list-units --type=service | grep -E 'artcafe|pubsub' | awk '{print $1}' | xargs -I{} systemctl restart {}",
+          "else",
+          "    echo \"No matching services found.\"",
+          "fi",
+          "",
+          "# Clean up",
+          "rm -rf /tmp/app_extract",
+          "rm -f /tmp/deploy_package.zip",
+          "",
+          "echo \"Deployment completed successfully\""
+        ]
+      }
+    }
+  ]
+}

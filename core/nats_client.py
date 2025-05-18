@@ -6,8 +6,8 @@ import asyncio
 from typing import Dict, Any, Callable, Optional, List, Union, Awaitable
 
 import nats
-from nats.aio.client import Client as NATS
-from nats.aio.msg import Msg
+from nats import NATS
+from nats.msg import Msg
 
 logger = logging.getLogger(__name__)
 

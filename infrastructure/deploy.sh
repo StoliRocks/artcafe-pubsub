@@ -96,7 +96,7 @@ fi
 
 # Create or update CloudFormation stack
 aws cloudformation deploy \
-    --template-file cloudformation.yml \
+    --template-file cloudformation-ubuntu.yml \
     --stack-name $STACK_NAME \
     --region $REGION \
     --parameter-overrides \

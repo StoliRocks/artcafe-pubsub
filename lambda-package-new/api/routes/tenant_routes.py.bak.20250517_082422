@@ -1,0 +1,234 @@
+from fastapi import APIRouter, HTTPException, status, Depends, Header
+from fastapi.responses import JSONResponse
+from typing import List, Optional
+
+from models import TenantCreate, TenantResponse, Tenant
+from api.services import tenant_service
+from auth.dependencies import get_current_tenant_id, security
+from auth.jwt_handler import decode_token
+from config.settings import settings
+
+router = APIRouter(prefix="/tenants", tags=["tenants"])
+
+
+@router.post("", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
+async def create_tenant(tenant_data: TenantCreate):
+    """
+    Create a new tenant
+    
+    Args:
+        tenant_data: Tenant data
+        
+    Returns:
+        Created tenant info with API key and admin token
+    """
+    try:
+        # Create tenant
+        result = await tenant_service.create_tenant(tenant_data)
+        
+        return TenantResponse(
+            tenant_id=result["tenant_id"],
+            api_key=result["api_key"],
+            admin_token=result["admin_token"],
+            success=True
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating tenant: {str(e)}"
+        )
+
+
+@router.get("", response_model=List[Tenant])
+async def list_tenants(
+    credentials = Depends(security),
+    limit: int = 100
+):
+    """
+    List tenants accessible by the current user
+    
+    Args:
+        limit: Maximum number of tenants to return
+        
+    Returns:
+        List of tenants
+    """
+    try:
+        # Decode JWT to get user info
+        payload = decode_token(credentials.credentials)
+        email = payload.get("email")
+        
+        # TODO: Implement user-tenant mapping to filter tenants by user
+        # For now, we return all tenants matching the email as admin_email
+        tenants = await tenant_service.list_tenants(limit=limit)
+        
+        # Filter by admin email
+        user_tenants = [t for t in tenants if t.admin_email == email]
+        
+        return user_tenants
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing tenants: {str(e)}"
+        )
+
+
+@router.get("/{tenant_id}", response_model=Tenant)
+async def get_tenant(
+    tenant_id: str,
+    credentials = Depends(security),
+    x_tenant_id: Optional[str] = Header(None, alias=settings.TENANT_ID_HEADER_NAME)
+):
+    """
+    Get a specific tenant by ID
+    
+    Args:
+        tenant_id: Tenant ID
+        
+    Returns:
+        Tenant details
+    """
+    try:
+        # Decode JWT to get user info
+        payload = decode_token(credentials.credentials)
+        email = payload.get("email")
+        
+        # Get tenant
+        tenant = await tenant_service.get_tenant(tenant_id)
+        
+        if not tenant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tenant {tenant_id} not found"
+            )
+        
+        # Check access rights
+        if x_tenant_id != tenant_id and tenant.admin_email != email:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
+        return tenant
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting tenant: {str(e)}"
+        )
+
+
+@router.put("/{tenant_id}", response_model=Tenant)
+async def update_tenant(
+    tenant_id: str,
+    update_data: dict,
+    credentials = Depends(security),
+    x_tenant_id: Optional[str] = Header(None, alias=settings.TENANT_ID_HEADER_NAME)
+):
+    """
+    Update a tenant
+    
+    Args:
+        tenant_id: Tenant ID
+        update_data: Fields to update
+        
+    Returns:
+        Updated tenant
+    """
+    try:
+        # Decode JWT to get user info
+        payload = decode_token(credentials.credentials)
+        email = payload.get("email")
+        
+        # Get current tenant
+        tenant = await tenant_service.get_tenant(tenant_id)
+        
+        if not tenant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tenant {tenant_id} not found"
+            )
+        
+        # Check access rights
+        if x_tenant_id != tenant_id and tenant.admin_email != email:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
+        # Update tenant
+        # TODO: Create a proper update method in tenant_service
+        from ..db import dynamodb
+        await dynamodb.update_item(
+            table_name=settings.TENANT_TABLE_NAME,
+            key={"id": tenant_id},
+            updates=update_data
+        )
+        
+        # Get updated tenant
+        updated_tenant = await tenant_service.get_tenant(tenant_id)
+        return updated_tenant
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating tenant: {str(e)}"
+        )
+
+
+@router.delete("/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_tenant(
+    tenant_id: str,
+    credentials = Depends(security),
+    x_tenant_id: Optional[str] = Header(None, alias=settings.TENANT_ID_HEADER_NAME)
+):
+    """
+    Delete a tenant
+    
+    Args:
+        tenant_id: Tenant ID
+        
+    Returns:
+        No content on success
+    """
+    try:
+        # Decode JWT to get user info
+        payload = decode_token(credentials.credentials)
+        email = payload.get("email")
+        
+        # Get tenant
+        tenant = await tenant_service.get_tenant(tenant_id)
+        
+        if not tenant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tenant {tenant_id} not found"
+            )
+        
+        # Check access rights
+        if x_tenant_id != tenant_id and tenant.admin_email != email:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
+        # Delete tenant
+        # TODO: Create a proper delete method in tenant_service
+        from ..db import dynamodb
+        await dynamodb.delete_item(
+            table_name=settings.TENANT_TABLE_NAME,
+            key={"id": tenant_id}
+        )
+        
+        # TODO: Also delete related resources (agents, channels, etc.)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting tenant: {str(e)}"
+        )

@@ -1,0 +1,851 @@
+openapi: 3.0.3
+info:
+  title: ArtCafe.ai PubSub API
+  description: |
+    API documentation for the ArtCafe.ai PubSub Service.
+    
+    This API enables agent management, tenant management, and real-time communication
+    for the ArtCafe.ai platform.
+  version: 1.0.0
+  contact:
+    name: ArtCafe.ai Support
+    email: support@artcafe.ai
+    url: https://artcafe.ai/support
+servers:
+  - url: https://api.artcafe.ai/api/v1
+    description: Production server
+  - url: https://api.staging.artcafe.ai/api/v1
+    description: Staging server
+  - url: http://localhost:8000/api/v1
+    description: Local development server
+
+tags:
+  - name: Authentication
+    description: Authentication endpoints
+  - name: Agents
+    description: Agent management endpoints
+  - name: SSH Keys
+    description: SSH key management endpoints
+  - name: Channels
+    description: Channel management endpoints
+  - name: Tenants
+    description: Tenant management endpoints
+  - name: Usage
+    description: Usage metrics and billing endpoints
+
+paths:
+  /auth/challenge:
+    post:
+      summary: Generate authentication challenge
+      description: |
+        Generates a random challenge string that must be signed with a private key
+        to complete authentication.
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_id:
+                  type: string
+                  format: uuid
+                  description: Optional agent ID if authenticating as an agent
+              example:
+                agent_id: "agent-123e4567-e89b-12d3-a456-426614174000"
+      responses:
+        '200':
+          description: Challenge generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  challenge:
+                    type: string
+                    description: Random challenge string to sign
+                  expires_at:
+                    type: string
+                    format: date-time
+                    description: Challenge expiration time
+                  tenant_id:
+                    type: string
+                    description: Tenant ID
+                  agent_id:
+                    type: string
+                    description: Agent ID if provided in request
+                example:
+                  challenge: "a49f7458c30d5d1ec482341a36f8b0a54896ec08d9ec95ce"
+                  expires_at: "2023-05-01T12:45:30Z"
+                  tenant_id: "tenant-123"
+                  agent_id: "agent-123e4567-e89b-12d3-a456-426614174000"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  
+  /auth/verify:
+    post:
+      summary: Verify challenge response
+      description: |
+        Verifies the signature of a challenge and issues a JWT token if valid.
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - key_id
+                - challenge
+                - response
+              properties:
+                tenant_id:
+                  type: string
+                  description: Tenant ID
+                key_id:
+                  type: string
+                  description: SSH key ID
+                challenge:
+                  type: string
+                  description: Challenge string from /auth/challenge
+                response:
+                  type: string
+                  description: Base64-encoded signature of the challenge
+                agent_id:
+                  type: string
+                  description: Optional agent ID if authenticating as an agent
+              example:
+                tenant_id: "tenant-123"
+                key_id: "key-123"
+                challenge: "a49f7458c30d5d1ec482341a36f8b0a54896ec08d9ec95ce"
+                response: "AABBCCDDEEFF=="
+                agent_id: "agent-123"
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    description: Whether the signature is valid
+                  token:
+                    type: string
+                    description: JWT token for subsequent API calls
+                  message:
+                    type: string
+                    description: Success message
+                example:
+                  valid: true
+                  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  message: "Authentication successful"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  
+  /agents:
+    get:
+      summary: List agents
+      description: |
+        Returns a list of agents for the tenant.
+      tags:
+        - Agents
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - name: status
+          in: query
+          description: Filter by agent status
+          schema:
+            type: string
+            enum: [online, offline, busy, error]
+        - name: type
+          in: query
+          description: Filter by agent type
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of agents to return
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+        - name: next_token
+          in: query
+          description: Pagination token
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agents retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agent'
+                  next_token:
+                    type: string
+                    description: Pagination token for the next page
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Register new agent
+      description: |
+        Registers a new agent for the tenant.
+      tags:
+        - Agents
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCreate'
+      responses:
+        '200':
+          description: Agent registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  
+  /agents/{agent_id}:
+    get:
+      summary: Get agent details
+      description: |
+        Returns details for a specific agent.
+      tags:
+        - Agents
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - name: agent_id
+          in: path
+          required: true
+          description: Agent ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  
+  /agents/{agent_id}/status:
+    put:
+      summary: Update agent status
+      description: |
+        Updates the status of an agent.
+      tags:
+        - Agents
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - name: agent_id
+          in: path
+          required: true
+          description: Agent ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [online, offline, busy, error]
+                  description: New agent status
+              example:
+                status: "online"
+      responses:
+        '200':
+          description: Agent status updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  
+  /ssh-keys:
+    get:
+      summary: List SSH keys
+      description: |
+        Returns a list of SSH keys for the tenant.
+      tags:
+        - SSH Keys
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - name: agent_id
+          in: query
+          description: Filter by agent ID
+          schema:
+            type: string
+        - name: key_type
+          in: query
+          description: Filter by key type
+          schema:
+            type: string
+            enum: [access, agent, deployment]
+        - name: limit
+          in: query
+          description: Maximum number of keys to return
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+        - name: next_token
+          in: query
+          description: Pagination token
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSH keys retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ssh_keys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SSHKey'
+                  next_token:
+                    type: string
+                    description: Pagination token for the next page
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Add new SSH key
+      description: |
+        Adds a new SSH key for the tenant.
+      tags:
+        - SSH Keys
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SSHKeyCreate'
+      responses:
+        '200':
+          description: SSH key added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  
+  /ssh-keys/{key_id}:
+    delete:
+      summary: Delete SSH key
+      description: |
+        Deletes an SSH key.
+      tags:
+        - SSH Keys
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - name: key_id
+          in: path
+          required: true
+          description: SSH key ID
+          schema:
+            type: string
+      responses:
+        '204':
+          description: SSH key deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  
+  /ssh-keys/{key_id}/revoke:
+    post:
+      summary: Revoke SSH key
+      description: |
+        Revokes an SSH key, marking it as invalid for future use.
+      tags:
+        - SSH Keys
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - name: key_id
+          in: path
+          required: true
+          description: SSH key ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+                  description: Reason for revocation
+              example:
+                reason: "Key compromised"
+      responses:
+        '200':
+          description: SSH key revoked successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  schemas:
+    Agent:
+      type: object
+      properties:
+        agent_id:
+          type: string
+          description: Unique identifier for the agent
+        name:
+          type: string
+          description: Agent name
+        type:
+          type: string
+          description: Agent type
+        status:
+          type: string
+          enum: [online, offline, busy, error]
+          description: Agent status
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capability'
+          description: Agent capabilities
+        last_seen:
+          type: string
+          format: date-time
+          description: When the agent was last seen
+        created_at:
+          type: string
+          format: date-time
+          description: When the agent was created
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata
+      example:
+        agent_id: "agent-123"
+        name: "Processing Agent"
+        type: "worker"
+        status: "online"
+        capabilities: [
+          {
+            "name": "process_data",
+            "description": "Process and transform data",
+            "parameters": {
+              "formats": ["json", "csv", "xml"],
+              "max_size_mb": 100
+            },
+            "version": "1.0.0"
+          }
+        ]
+        last_seen: "2023-05-01T12:34:56Z"
+        created_at: "2023-04-01T10:00:00Z"
+        metadata: {
+          "deployed_by": "user1",
+          "environment": "production"
+        }
+    
+    AgentCreate:
+      type: object
+      required:
+        - name
+        - type
+      properties:
+        name:
+          type: string
+          description: Agent name
+        type:
+          type: string
+          description: Agent type
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capability'
+          description: Agent capabilities
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata
+      example:
+        name: "Processing Agent"
+        type: "worker"
+        capabilities: [
+          {
+            "name": "process_data",
+            "description": "Process and transform data",
+            "parameters": {
+              "formats": ["json", "csv", "xml"],
+              "max_size_mb": 100
+            },
+            "version": "1.0.0"
+          }
+        ]
+        metadata: {
+          "deployed_by": "user1",
+          "environment": "production"
+        }
+    
+    AgentResponse:
+      type: object
+      properties:
+        agent_id:
+          type: string
+          description: Unique identifier for the agent
+        name:
+          type: string
+          description: Agent name
+        type:
+          type: string
+          description: Agent type
+        status:
+          type: string
+          enum: [online, offline, busy, error]
+          description: Agent status
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capability'
+          description: Agent capabilities
+        last_seen:
+          type: string
+          format: date-time
+          description: When the agent was last seen
+        created_at:
+          type: string
+          format: date-time
+          description: When the agent was created
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata
+      example:
+        agent_id: "agent-123"
+        name: "Processing Agent"
+        type: "worker"
+        status: "online"
+        capabilities: [
+          {
+            "name": "process_data",
+            "description": "Process and transform data",
+            "parameters": {
+              "formats": ["json", "csv", "xml"],
+              "max_size_mb": 100
+            },
+            "version": "1.0.0"
+          }
+        ]
+        last_seen: "2023-05-01T12:34:56Z"
+        created_at: "2023-04-01T10:00:00Z"
+        metadata: {
+          "deployed_by": "user1",
+          "environment": "production"
+        }
+    
+    Capability:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Capability name
+        description:
+          type: string
+          description: Capability description
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Capability parameters
+        version:
+          type: string
+          description: Capability version
+      example:
+        name: "process_data"
+        description: "Process and transform data"
+        parameters: {
+          "formats": ["json", "csv", "xml"],
+          "max_size_mb": 100
+        }
+        version: "1.0.0"
+    
+    SSHKey:
+      type: object
+      properties:
+        key_id:
+          type: string
+          description: Unique identifier for the SSH key
+        name:
+          type: string
+          description: SSH key name
+        public_key:
+          type: string
+          description: SSH public key
+        key_type:
+          type: string
+          enum: [access, agent, deployment]
+          description: SSH key type
+        agent_id:
+          type: string
+          description: Agent ID if key is associated with an agent
+        fingerprint:
+          type: string
+          description: SSH key fingerprint
+        status:
+          type: string
+          enum: [active, revoked]
+          description: SSH key status
+        last_used:
+          type: string
+          format: date-time
+          description: When the key was last used
+        revoked:
+          type: boolean
+          description: Whether the key is revoked
+        revoked_at:
+          type: string
+          format: date-time
+          description: When the key was revoked
+        revocation_reason:
+          type: string
+          description: Reason for revocation
+        created_at:
+          type: string
+          format: date-time
+          description: When the key was created
+      example:
+        key_id: "key-123"
+        name: "Agent Key"
+        public_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADA..."
+        key_type: "agent"
+        agent_id: "agent-123"
+        fingerprint: "SHA256:1234567890abcdef..."
+        status: "active"
+        last_used: "2023-05-01T12:34:56Z"
+        revoked: false
+        created_at: "2023-04-01T10:00:00Z"
+    
+    SSHKeyCreate:
+      type: object
+      required:
+        - name
+        - public_key
+      properties:
+        name:
+          type: string
+          description: SSH key name
+        public_key:
+          type: string
+          description: SSH public key
+        key_type:
+          type: string
+          enum: [access, agent, deployment]
+          default: access
+          description: SSH key type
+        agent_id:
+          type: string
+          description: Agent ID if key is associated with an agent
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata
+      example:
+        name: "Agent Key"
+        public_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADA..."
+        key_type: "agent"
+        agent_id: "agent-123"
+        metadata: {
+          "added_by": "user1",
+          "environment": "production"
+        }
+    
+    SSHKeyResponse:
+      type: object
+      properties:
+        key:
+          $ref: '#/components/schemas/SSHKey'
+        success:
+          type: boolean
+          description: Whether the operation was successful
+      example:
+        key: {
+          "key_id": "key-123",
+          "name": "Agent Key",
+          "public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADA...",
+          "key_type": "agent",
+          "agent_id": "agent-123",
+          "fingerprint": "SHA256:1234567890abcdef...",
+          "status": "active",
+          "last_used": null,
+          "revoked": false,
+          "created_at": "2023-04-01T10:00:00Z"
+        }
+        success: true
+
+  parameters:
+    TenantHeader:
+      name: x-tenant-id
+      in: header
+      description: Tenant ID
+      required: true
+      schema:
+        type: string
+    
+    AuthorizationHeader:
+      name: Authorization
+      in: header
+      description: JWT bearer token
+      required: true
+      schema:
+        type: string
+  
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                description: Error message
+            example:
+              detail: "Invalid request parameters"
+    
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                description: Error message
+            example:
+              detail: "Not authenticated"
+    
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                description: Error message
+            example:
+              detail: "Not authorized to access this resource"
+    
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                description: Error message
+            example:
+              detail: "Resource not found"
+    
+    TooManyRequests:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                description: Error message
+            example:
+              detail: "Rate limit exceeded"
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from /auth/verify
+
+security:
+  - bearerAuth: []
