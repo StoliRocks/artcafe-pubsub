@@ -23,7 +23,7 @@ class UsageService:
         """Initialize usage service"""
         pass
 
-        async def get_usage_metrics(
+    async def get_usage_metrics(
         self,
         tenant_id: str,
         start_date: Optional[str] = None,
