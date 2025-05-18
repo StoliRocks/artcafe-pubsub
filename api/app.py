@@ -11,19 +11,19 @@ from .middleware import setup_middleware
 from .db import dynamodb
 from nats_client import nats_manager
 
-# Apply runtime boolean fix for DynamoDB
-try:
-    import complete_boolean_fix
-    logger.info("Applied complete boolean fix for DynamoDB")
-except Exception as e:
-    logger.warning(f"Could not apply complete boolean fix: {e}")
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Apply runtime boolean fix for DynamoDB
+try:
+    import complete_boolean_fix
+    logger.info("Applied complete boolean fix for DynamoDB")
+except Exception as e:
+    logger.warning(f"Could not apply complete boolean fix: {e}")
 
 # Create FastAPI app
 app = FastAPI(
