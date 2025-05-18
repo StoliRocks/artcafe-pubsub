@@ -9,6 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 2. **Agent Model**: Started removing `type` field requirement
 3. **Tags**: Made optional in AgentMetadata
 4. **Deployment**: Set up API Gateway as proxy
+5. **WebSocket Auth**: Added JWT validation to dashboard WebSocket endpoint
+6. **Usage Metrics**: Fixed to fetch real data from database
 
 ### Current State
 - Service running on EC2 at `/opt/artcafe/artcafe-pubsub`
