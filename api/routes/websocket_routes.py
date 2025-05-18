@@ -2,7 +2,7 @@ import json
 import logging
 import asyncio
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, status
 from starlette.websockets import WebSocketState
 
@@ -26,6 +26,13 @@ connected_clients: Dict[str, Dict[str, Dict[str, WebSocket]]] = {}
 # Message queues - Used to buffer messages while processing
 # Structure: {"tenant_id": {"channel_id": Queue}}
 message_queues: Dict[str, Dict[str, asyncio.Queue]] = {}
+
+# Track last heartbeat for agents
+# Structure: {"tenant_id": {"agent_id": datetime}}
+agent_heartbeats: Dict[str, Dict[str, datetime]] = {}
+
+# Heartbeat timeout in seconds
+HEARTBEAT_TIMEOUT = 60
 
 
 class WebSocketConnectionManager:
@@ -80,8 +87,9 @@ class WebSocketConnectionManager:
                 subject = subjects.get_channel_subject(tenant_id, channel_id)
                 await nats_manager.subscribe(subject, on_message)
                 
-                # Update agent status to online
-                await agent_service.update_agent_status(tenant_id, agent_id, "online")
+                # Don't automatically set agent to online
+                # Agent will be set online when it sends a heartbeat
+                # await agent_service.update_agent_status(tenant_id, agent_id, "online")
                 
                 logger.info(f"WebSocket connected: tenant={tenant_id}, agent={agent_id}, channel={channel_id}")
             else:
@@ -248,7 +256,45 @@ async def process_message_queue(tenant_id: str, channel_id: str):
         logger.error(f"Error processing message queue: {e}")
 
 
-@router.websocket("/ws")
+
+
+async def check_heartbeat_timeouts():
+    """Background task to check for agent heartbeat timeouts."""
+    while True:
+        try:
+            current_time = datetime.utcnow()
+            timeout_delta = timedelta(seconds=HEARTBEAT_TIMEOUT)
+            
+            # Check all agents for heartbeat timeout
+            for tenant_id in list(agent_heartbeats.keys()):
+                for agent_id in list(agent_heartbeats.get(tenant_id, {}).keys()):
+                    last_heartbeat = agent_heartbeats[tenant_id].get(agent_id)
+                    
+                    if last_heartbeat and (current_time - last_heartbeat) > timeout_delta:
+                        # Agent hasn't sent heartbeat within timeout
+                        logger.warning(f"Agent heartbeat timeout: tenant={tenant_id}, agent={agent_id}")
+                        
+                        # Update agent status to offline
+                        await agent_service.update_agent_status(tenant_id, agent_id, "offline")
+                        
+                        # Remove from heartbeat tracking
+                        if tenant_id in agent_heartbeats and agent_id in agent_heartbeats[tenant_id]:
+                            del agent_heartbeats[tenant_id][agent_id]
+            
+            # Check every 10 seconds
+            await asyncio.sleep(10)
+            
+        except Exception as e:
+            logger.error(f"Error in heartbeat timeout check: {e}")
+            await asyncio.sleep(10)
+
+
+# Start heartbeat timeout checker when module loads
+# Note: This should be started by the main application
+# asyncio.create_task(check_heartbeat_timeouts())
+
+
+@router.websocket("/ws")@router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
     token: Optional[str] = Query(None),
@@ -302,6 +348,22 @@ async def websocket_endpoint(
             
             try:
                 message = json.loads(data)
+                msg_type = message.get("type")
+                
+                # Handle heartbeat messages from actual agents
+                if msg_type == "heartbeat":
+                    # Update heartbeat timestamp
+                    if tenant_id not in agent_heartbeats:
+                        agent_heartbeats[tenant_id] = {}
+                    
+                    agent_heartbeats[tenant_id][agent_id] = datetime.utcnow()
+                    
+                    # Update agent status to online if not already
+                    current_agent = await agent_service.get_agent(tenant_id, agent_id)
+                    if current_agent and current_agent.status != "online":
+                        await agent_service.update_agent_status(tenant_id, agent_id, "online")
+                    
+                    logger.debug(f"Heartbeat received: tenant={tenant_id}, agent={agent_id}")
                 
                 # Add tenant and agent information
                 message["tenant_id"] = tenant_id
