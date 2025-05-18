@@ -75,7 +75,7 @@ manager = ConnectionManager()
 @router.websocket("/dashboard")
 async def dashboard_websocket(
     websocket: WebSocket,
-    token: Optional[str] = None,
+    auth: Optional[str] = None,
     x_tenant_id: Optional[str] = None
 ):
     """
@@ -85,19 +85,33 @@ async def dashboard_websocket(
     - Authorization: Bearer <token>
     - x-tenant-id: <tenant_id>
     """
-    # Extract auth from query params or headers
+    # Extract auth from query params
+    token = None
+    tenant_id = x_tenant_id
+    
+    if auth:
+        try:
+            import base64
+            import json
+            auth_json = base64.b64decode(auth).decode('utf-8')
+            auth_info = json.loads(auth_json)
+            token = auth_info.get('token')
+            tenant_id = auth_info.get('tenantId') or x_tenant_id
+        except Exception as e:
+            logger.error(f"Failed to decode auth: {e}")
+    
     if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
         
-    if not x_tenant_id:
+    if not tenant_id:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     
     # TODO: Validate JWT token and extract user_id
     # For now, we'll use a placeholder
     user_id = "user-placeholder"
-    tenant_id = x_tenant_id
+    # tenant_id already set above
     
     await manager.connect(websocket, tenant_id, user_id)
     
