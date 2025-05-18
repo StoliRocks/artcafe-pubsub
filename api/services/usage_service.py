@@ -2,8 +2,7 @@ import logging
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 
-from models.usage import UsageMetrics, UsageTotals
-from models.channel import ChannelType
+from models.usage import UsageMetrics
 from api.db.dynamodb import dynamodb
 from config.settings import settings
 
