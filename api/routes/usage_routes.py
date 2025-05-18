@@ -102,16 +102,44 @@ async def get_billing_info(
 
     # Track API call
     await usage_service.increment_api_calls(tenant_id)
+    
+    # Get current usage for the month
+    today = date.today()
+    start_of_month = date(today.year, today.month, 1)
+    
+    metrics = await usage_service.get_usage_metrics(
+        tenant_id=tenant_id,
+        start_date=start_of_month.isoformat(),
+        end_date=today.isoformat()
+    )
+    
+    totals = await usage_service.get_usage_totals(
+        tenant_id=tenant_id,
+        start_date=start_of_month.isoformat(),
+        end_date=today.isoformat()
+    )
 
     # Get billing info from tenant
     return {
         "tenant_id": tenant_id,
         "plan": tenant.subscription_tier,
-        "billing_cycle": "monthly",  # Default
+        "billing_cycle": "monthly",
         "next_billing_date": tenant.subscription_expires_at.isoformat() if tenant.subscription_expires_at else None,
-        "amount": 49.99,  # Default for basic tier
+        "amount": 49.99 if tenant.subscription_tier == "basic" else 0.00,
         "currency": "USD",
-        "payment_method": "credit_card",
+        "payment_method": "credit_card" if tenant.subscription_tier != "free" else "none",
         "status": tenant.payment_status,
+        "current_usage": {
+            "agents": totals.agents_total if totals else 0,
+            "channels": totals.channels_total if totals else 0,
+            "messages": totals.messages_in_total if totals else 0,
+            "api_calls": totals.api_calls_count if hasattr(totals, 'api_calls_count') else 0
+        },
+        "limits": {
+            "agents": tenant.max_agents,
+            "channels": tenant.max_channels,
+            "messages_per_day": tenant.max_messages_per_day,
+            "api_calls_per_day": tenant.max_messages_per_day // 5
+        },
         "success": True
     }
