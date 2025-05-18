@@ -1,107 +1,137 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with the ArtCafe PubSub service codebase.
+
+## Session Notes - May 18, 2025
+
+### Changes Made
+1. **CORS Configuration**: Added `api.artcafe.ai` to allowed origins
+2. **Agent Model**: Started removing `type` field requirement
+3. **Tags**: Made optional in AgentMetadata
+4. **Deployment**: Set up API Gateway as proxy
+
+### Current State
+- Service running on EC2 at `/opt/artcafe/artcafe-pubsub`
+- API Gateway proxying requests
+- CORS properly configured
+- Need to complete model updates
+
+### Deployment Info
+- **EC2 Instance**: `i-0cd295d6b239ca775`
+- **Service**: `artcafe-pubsub.service`
+- **Direct URL**: `http://3.229.1.223:8000`
+- **API Gateway**: `https://m9lm7i9ed7.execute-api.us-east-1.amazonaws.com/prod`
 
 ## Project Overview
 
-ArtCafe.ai PubSub Service is a NATS-based pub/sub service that implements API endpoints used by the frontend. This service facilitates agent communication, management, and messaging. The project uses FastAPI for REST endpoints, NATS for messaging, DynamoDB for persistence, and supports multi-tenancy.
+ArtCafe.ai PubSub Service - FastAPI backend for agent management and NATS messaging.
+
+## Key Files
+
+### Configuration
+- `/config/settings.py` - Main settings including CORS origins
+- `/api/middleware.py` - CORS middleware configuration
+
+### Models
+- `/models/agent.py` - Agent data model (type field being removed)
+- `/models/user_tenant.py` - Multi-tenant user associations
+
+### API Routes
+- `/api/routes/agent_routes.py` - Agent CRUD operations
+- `/api/routes/tenant_routes.py` - Tenant management
+
+### Services
+- `/api/services/agent_service.py` - Agent business logic
+- `/api/services/tenant_service.py` - Tenant operations
 
 ## Commands
 
-### Environment Setup
-
+### Local Development
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 
-# Start local NATS server (using Docker)
-docker run -p 4222:4222 nats
-```
-
-### Development
-
-```bash
-# Run the FastAPI application
+# Run locally
 python -m api.app
 
-# Access API documentation
-# Visit http://localhost:8000/docs
-```
-
-### Testing
-
-```bash
-# Run the test client with default settings
-python -m tests.test_client
-
-# Run test client with custom settings
-python -m tests.test_client --api-endpoint http://localhost:8000/api/v1 --token <jwt-token> --tenant-id <tenant-id>
+# Run with NATS
+docker run -p 4222:4222 nats
+NATS_ENABLED=true python -m api.app
 ```
 
 ### Deployment
-
 ```bash
-# Deploy to AWS (requires AWS CLI configured with appropriate credentials)
-cd infrastructure
-chmod +x deploy.sh
-./deploy.sh --env dev --key-name YOUR_KEY_PAIR_NAME
+# Deploy via SSM
+aws ssm send-command \
+  --instance-ids i-0cd295d6b239ca775 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["cd /opt/artcafe/artcafe-pubsub", "sudo systemctl restart artcafe-pubsub"]'
 
-# Optional deployment parameters:
-# --region REGION_NAME           AWS region (default: us-east-1)
-# --stack-name STACK_NAME        CloudFormation stack name (default: artcafe-pubsub)
-# --code-package PACKAGE_NAME    Name of zip file (default: lambda.zip)
-# --nats-instance-type TYPE      EC2 instance type for NATS (default: t3.small)
-# --api-instance-type TYPE       EC2 instance type for API (default: t3.small)
-# --skip-package                 Skip packaging (for infrastructure-only updates)
+# Check service status
+sudo systemctl status artcafe-pubsub
 ```
 
-## Architecture
+## API Endpoints
 
-### Core Components
+### Health Check
+```bash
+curl http://3.229.1.223:8000/health
+```
 
-1. **API Layer** (api/ directory)
-   - FastAPI application with RESTful endpoints
-   - Authentication via JWT tokens
-   - Multi-tenant support via headers
-   - Routes for agents, channels, SSH keys, tenants, and usage
+### Agents
+- `GET /api/v1/agents` - List agents
+- `POST /api/v1/agents` - Create agent
+- `DELETE /api/v1/agents/{agent_id}` - Delete agent
 
-2. **Messaging Core** (core/ and nats/ directories)
-   - NATS client implementation
-   - Pub/sub and request-reply patterns
-   - Connection management and reconnection handling
-   - TLS support for secure connections
+## CORS Configuration
 
-3. **Persistence Layer** (api/db/ directory)
-   - DynamoDB tables for storing entity data
-   - Multi-tenant data isolation
-   - Automatic table creation and maintenance
+Current allowed origins in `settings.py`:
+```python
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://www.artcafe.ai",
+    "https://artcafe.ai",
+    "https://api.artcafe.ai",
+    "https://d1isgvgjiqe68i.cloudfront.net"
+]
+```
 
-4. **Infrastructure** (infrastructure/ directory)
-   - AWS CloudFormation for deployments
-   - EC2 instances for NATS and API servers
-   - DynamoDB tables for persistence
-   - Deployment automation script
+## Database
 
-### Data Models
+Using DynamoDB with tables:
+- `artcafe-agents`
+- `artcafe-tenants`
+- `artcafe-user-tenants`
+- `artcafe-ssh-keys`
 
-The system uses several data models for different entities:
+## To-Do
 
-- `Agent`: Represents an agent with capabilities and status
-- `Channel`: Communication channels between agents and users
-- `SSHKey`: SSH key management for secure access
-- `Tenant`: Multi-tenant isolation for organizations
-- `Usage`: Usage metrics and billing information
+1. Complete removal of `type` field from agent model
+2. Deploy model changes to production
+3. Update agent creation to not require type
+4. Test with frontend after deployment
+
+## Architecture Notes
+
+### Multi-Tenancy
+- Tenant ID from JWT token or API header
+- All queries scoped by tenant
+- Agents isolated per tenant
 
 ### Authentication
+- JWT tokens from Cognito
+- SSH keys for agent authentication
+- Challenge-response for agent onboarding
 
-- JWT authentication is used for API endpoints
-- Multi-tenant support with tenant IDs in headers
-- SSH key-based authentication for agent access
+### Status Management
+- Agent status determined by NATS connection
+- WebSocket updates for real-time status
+- No manual status changes allowed
 
-### API Endpoints
+## Recent Issues Fixed
 
-- `/api/v1/agents`: Agent registration and management
-- `/api/v1/ssh-keys`: SSH key management
-- `/api/v1/channels`: Channel creation and management
-- `/api/v1/tenants`: Tenant provisioning and management
-- `/api/v1/usage-metrics`: Usage tracking and reporting
+1. **CORS**: Now handled by API Gateway
+2. **Boolean Values**: Fixed DynamoDB boolean handling
+3. **User-Tenant**: Fixed query issues
+
+Last updated: May 18, 2025
