@@ -135,5 +135,11 @@ class NatsConnectionManager:
         """Called when NATS client connection is closed"""
         logger.info("NATS connection closed")
 
+
+    async def get_stats(self) -> Optional[Dict[str, Any]]:
+        """Get NATS connection statistics (stub for now)"""
+        # TODO: Implement actual stats collection if needed
+        return None
+
 # Singleton instance
 nats_manager = NatsConnectionManager()
