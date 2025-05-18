@@ -188,6 +188,56 @@ class UsageService:
         except Exception as e:
             logger.error(f"Error incrementing messages: {e}")
 
+    async def get_usage_totals(self, tenant_id: str, start_date: Optional[str] = None, end_date: Optional[str] = None):
+        """
+        Get usage totals for a tenant.
+
+        Args:
+            tenant_id: Tenant ID
+            start_date: Optional start date (ISO format)
+            end_date: Optional end date (ISO format)
+
+        Returns:
+            Usage totals
+        """
+        try:
+            # For now, return default totals
+            # This would normally aggregate data from the metrics
+            metrics = await self.get_usage_metrics(
+                tenant_id=tenant_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            # Calculate totals from metrics
+            total_messages = sum(m.messages_count for m in metrics)
+            total_api_calls = sum(m.api_calls_count for m in metrics)
+            
+            # Return UsageTotals-like object
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                messages_in_total=total_messages,
+                messages_out_total=0,
+                api_calls_count=total_api_calls,
+                agents_total=metrics[0].agents_count if metrics else 0,
+                channels_total=metrics[0].channels_count if metrics else 0,
+                start_date=start_date or date.today().isoformat(),
+                end_date=end_date or date.today().isoformat()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting usage totals: {e}")
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                messages_in_total=0,
+                messages_out_total=0,
+                api_calls_count=0,
+                agents_total=0,
+                channels_total=0,
+                start_date=start_date or date.today().isoformat(),
+                end_date=end_date or date.today().isoformat()
+            )
+
 
 # Singleton instance
 usage_service = UsageService()
