@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, HTTPException, status
 from starlette.websockets import WebSocketState
 
-from auth.jwt_auth import get_current_user, get_user_from_token
+from auth.dependencies import get_current_user
+from auth.jwt_handler import decode_token
 from auth.tenant_auth import get_tenant_id, validate_tenant, check_tenant_limits
 from nats_client import nats_manager, subjects
 from models.tenant import Tenant
@@ -158,7 +159,7 @@ async def get_tenant_from_token(
     
     try:
         # Get user and tenant ID from token
-        user_data = get_user_from_token(token)
+        user_data = decode_token(token)
         tenant_id = user_data.get("tenant_id")
         
         if not tenant_id:
@@ -294,7 +295,7 @@ async def check_heartbeat_timeouts():
 # asyncio.create_task(check_heartbeat_timeouts())
 
 
-@router.websocket("/ws")@router.websocket("/ws")
+@router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
     token: Optional[str] = Query(None),
@@ -426,7 +427,7 @@ async def channel_websocket_endpoint(
     
     try:
         # Authenticate the connection
-        user_data = get_user_from_token(token)
+        user_data = decode_token(token)
         token_tenant_id = user_data.get("tenant_id")
         token_agent_id = user_data.get("agent_id")
         
