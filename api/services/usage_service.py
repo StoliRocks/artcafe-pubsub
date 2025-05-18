@@ -112,6 +112,22 @@ class UsageService:
                 created_at=datetime.utcnow().isoformat()
             )]
 
+    async def get_usage_by_date_range(self, tenant_id: str, start_date: str, end_date: str) -> List[UsageMetrics]:
+        """
+        Get usage metrics for a date range.
+        
+        Args:
+            tenant_id: Tenant ID
+            start_date: Start date (ISO format)
+            end_date: End date (ISO format)
+            
+        Returns:
+            List of usage metrics
+        """
+        # For now, just return current metrics
+        # In a real implementation, this would query historical data
+        return await self.get_usage_metrics(tenant_id, start_date, end_date)
+
     async def increment_api_calls(self, tenant_id: str, count: int = 1):
         """
         Increment API calls count for a tenant.
@@ -200,6 +216,8 @@ class UsageService:
         Returns:
             Usage totals
         """
+        from models.usage import UsageTotals
+        
         try:
             # For now, return default totals
             # This would normally aggregate data from the metrics
@@ -213,29 +231,39 @@ class UsageService:
             total_messages = sum(m.messages_count for m in metrics)
             total_api_calls = sum(m.api_calls_count for m in metrics)
             
-            # Return UsageTotals-like object
-            from types import SimpleNamespace
-            return SimpleNamespace(
-                messages_in_total=total_messages,
-                messages_out_total=0,
-                api_calls_count=total_api_calls,
-                agents_total=metrics[0].agents_count if metrics else 0,
-                channels_total=metrics[0].channels_count if metrics else 0,
+            # Get most recent counts for agents and channels
+            latest_metric = metrics[0] if metrics else None
+            
+            # Return proper UsageTotals object
+            return UsageTotals(
+                tenant_id=tenant_id,
                 start_date=start_date or date.today().isoformat(),
-                end_date=end_date or date.today().isoformat()
+                end_date=end_date or date.today().isoformat(),
+                agents_total=latest_metric.agents_count if latest_metric else 0,
+                active_agents_total=latest_metric.active_agents_count if latest_metric else 0,
+                channels_total=latest_metric.channels_count if latest_metric else 0,
+                active_channels_total=latest_metric.active_channels_count if latest_metric else 0,
+                messages_in_total=total_messages,
+                messages_out_total=0,  # We don't track outbound separately yet
+                api_calls_total=total_api_calls,
+                timestamp=datetime.utcnow().isoformat() + "Z"
             )
             
         except Exception as e:
             logger.error(f"Error getting usage totals: {e}")
-            from types import SimpleNamespace
-            return SimpleNamespace(
+            # Return proper UsageTotals object with zero values
+            return UsageTotals(
+                tenant_id=tenant_id,
+                start_date=start_date or date.today().isoformat(),
+                end_date=end_date or date.today().isoformat(),
+                agents_total=0,
+                active_agents_total=0,
+                channels_total=0,
+                active_channels_total=0,
                 messages_in_total=0,
                 messages_out_total=0,
-                api_calls_count=0,
-                agents_total=0,
-                channels_total=0,
-                start_date=start_date or date.today().isoformat(),
-                end_date=end_date or date.today().isoformat()
+                api_calls_total=0,
+                timestamp=datetime.utcnow().isoformat() + "Z"
             )
 
 

@@ -1,0 +1,23 @@
+api.artcafe.ai {
+    # Automatic HTTPS with Let's Encrypt
+    
+    # WebSocket endpoint
+    reverse_proxy /api/v1/ws/* localhost:8000 {
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+    }
+    
+    # Regular API endpoints
+    reverse_proxy /api/v1/* localhost:8000
+    
+    # Health check
+    reverse_proxy /health localhost:8000
+    
+    # CORS headers
+    header {
+        Access-Control-Allow-Origin https://www.artcafe.ai
+        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Authorization, Content-Type, X-Tenant-Id"
+        Access-Control-Allow-Credentials true
+    }
+}
