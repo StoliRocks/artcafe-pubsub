@@ -117,6 +117,13 @@ async def startup_event():
         logger.info("Challenge store initialized")
     except Exception as e:
         logger.error(f"Failed to initialize challenge store: {e}")
+    
+    # Start heartbeat timeout checker for WebSocket connections
+    try:
+        from .routes.websocket_routes import start_heartbeat_checker
+        await start_heartbeat_checker()
+    except Exception as e:
+        logger.error(f"Failed to start heartbeat timeout checker: {e}")
 
     logger.info("ArtCafe.ai PubSub API started")
 

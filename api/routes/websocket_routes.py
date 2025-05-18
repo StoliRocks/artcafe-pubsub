@@ -290,9 +290,15 @@ async def check_heartbeat_timeouts():
             await asyncio.sleep(10)
 
 
-# Start heartbeat timeout checker when module loads
-# Note: This should be started by the main application
-# asyncio.create_task(check_heartbeat_timeouts())
+# Global variable to store the heartbeat checker task
+heartbeat_checker_task = None
+
+async def start_heartbeat_checker():
+    """Start the heartbeat timeout checker"""
+    global heartbeat_checker_task
+    if heartbeat_checker_task is None:
+        heartbeat_checker_task = asyncio.create_task(check_heartbeat_timeouts())
+        logger.info("Started heartbeat timeout checker")
 
 
 @router.websocket("/ws")
