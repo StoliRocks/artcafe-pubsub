@@ -76,6 +76,7 @@ class Settings(BaseSettings):
             "http://localhost:3001",
             "https://www.artcafe.ai",
             "https://artcafe.ai",
+            "https://api.artcafe.ai",
             "https://d1isgvgjiqe68i.cloudfront.net",
             "http://3.229.1.223:3000"
         ],
