@@ -121,7 +121,7 @@ class SSHKeyService:
         """
         try:
             # Generate key ID
-            key_id = str(ulid.new())
+            key_id = str(ulid.ULID())
 
             # Calculate fingerprint for the public key
             fingerprint = self.key_manager.calculate_fingerprint(key_data.public_key)

@@ -66,7 +66,7 @@ class ChannelSubscriptionService:
         """
         try:
             # Generate subscription ID
-            subscription_id = f"sub-{ulid.new().str.lower()}"
+            subscription_id = f"sub-{ulid.ULID().str.lower()}"
             
             # Create subscription
             subscription = ChannelSubscription(

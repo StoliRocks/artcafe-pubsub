@@ -115,7 +115,7 @@ class AgentService:
             await limits_service.enforce_limit(tenant_id, "agents", current_count)
             
             # Generate agent ID
-            agent_id = str(ulid.new())
+            agent_id = str(ulid.ULID())
             
             # Prepare agent data
             agent_dict = agent_data.dict()

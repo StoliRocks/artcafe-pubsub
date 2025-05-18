@@ -16,8 +16,8 @@ with open(tenant_service_path, 'r') as f:
 # Replace ULID imports and usage with UUID
 replacements = [
     ('import ulid', 'import uuid'),
-    ('str(ulid.new())', 'str(uuid.uuid4())'),
-    ('ulid.new().str.lower()', 'str(uuid.uuid4()).lower()')
+    ('str(ulid.ULID())', 'str(uuid.uuid4())'),
+    ('ulid.ULID().str.lower()', 'str(uuid.uuid4()).lower()')
 ]
 
 for old, new in replacements:

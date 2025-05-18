@@ -97,7 +97,7 @@ class ChannelService:
         """
         try:
             # Generate channel ID
-            channel_id = str(ulid.new())
+            channel_id = str(ulid.ULID())
             
             # Prepare channel data
             channel_dict = channel_data.dict()
@@ -183,7 +183,7 @@ class ChannelService:
                 "timestamp": datetime.utcnow().isoformat(),
                 "tenant_id": tenant_id,
                 "channel_id": channel_id,
-                "message_id": str(ulid.new())
+                "message_id": str(ulid.ULID())
             }
             
             # Publish message to NATS
