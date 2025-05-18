@@ -6,6 +6,7 @@ from fastapi import APIRouter, WebSocket, Depends, HTTPException, status
 from websockets.exceptions import ConnectionClosed
 
 from auth.dependencies import get_current_tenant_id, get_current_user_id
+from auth.jwt_auth import jwt_auth
 from core.nats_client import nats_manager
 from infrastructure.dynamodb_service import dynamodb
 from config.settings import settings
@@ -108,10 +109,15 @@ async def dashboard_websocket(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
     
-    # TODO: Validate JWT token and extract user_id
-    # For now, we'll use a placeholder
-    user_id = "user-placeholder"
-    # tenant_id already set above
+    # Validate JWT token and extract user_id
+    try:
+        payload = jwt_auth.verify_token(token)
+        user_id = payload.get('sub') or payload.get('user_id') or payload.get('cognito:username', 'user-placeholder')
+        # tenant_id already set above
+    except Exception as e:
+        logger.error(f"Failed to validate JWT token: {e}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     
     await manager.connect(websocket, tenant_id, user_id)
     
