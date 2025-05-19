@@ -1,6 +1,7 @@
 import logging
 import ulid
-from typing import Dict, List, Optional
+import hashlib
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 from ..db import dynamodb
@@ -8,6 +9,7 @@ from config.settings import settings
 from models import Agent, AgentCreate, AgentUpdate
 from nats_client import nats_manager, subjects
 from .limits_service import limits_service
+from utils.ssh_key_generator import ssh_key_generator
 
 logger = logging.getLogger(__name__)
 
@@ -98,16 +100,16 @@ class AgentService:
             logger.error(f"Error getting agent {agent_id} for tenant {tenant_id}: {e}")
             raise
             
-    async def create_agent(self, tenant_id: str, agent_data: AgentCreate) -> Agent:
+    async def create_agent(self, tenant_id: str, agent_data: AgentCreate) -> Tuple[Agent, Optional[str]]:
         """
-        Create a new agent
+        Create a new agent with SSH keypair
         
         Args:
             tenant_id: Tenant ID
             agent_data: Agent data
             
         Returns:
-            Created agent
+            Tuple of (Created agent, private key) - private key is None if not generated
         """
         try:
             # Check usage limits
@@ -124,6 +126,21 @@ class AgentService:
             agent_dict["status"] = "offline"  # Initial status is always offline
             agent_dict["last_seen"] = datetime.utcnow().isoformat()
             
+            # Generate SSH keypair if no public key was provided
+            private_key = None
+            if not agent_dict.get("public_key"):
+                logger.info(f"Generating SSH keypair for agent {agent_id}")
+                private_key, public_key = ssh_key_generator.generate_agent_keypair(
+                    agent_data.name,
+                    tenant_id
+                )
+                agent_dict["public_key"] = public_key
+                
+                # Generate fingerprint for the public key
+                key_bytes = public_key.encode('utf-8')
+                fingerprint = hashlib.sha256(key_bytes).hexdigest()
+                agent_dict["key_fingerprint"] = fingerprint
+            
             # Store in DynamoDB
             item = await dynamodb.put_item(
                 table_name=settings.AGENT_TABLE_NAME,
@@ -139,7 +156,7 @@ class AgentService:
             # Publish event to NATS
             await self._publish_agent_create_event(tenant_id, agent)
             
-            return agent
+            return agent, private_key
         except Exception as e:
             logger.error(f"Error creating agent for tenant {tenant_id}: {e}")
             raise

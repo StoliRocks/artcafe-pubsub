@@ -36,6 +36,7 @@ class Agent(AgentBase, BaseSchema):
     status: str  # Status is determined by connection state, not user-set
     tenant_id: str
     public_key: Optional[str] = None
+    key_fingerprint: Optional[str] = None
     last_seen: datetime = Field(default_factory=datetime.utcnow)
     
     # Subscription tracking
@@ -51,6 +52,13 @@ class Agent(AgentBase, BaseSchema):
 class AgentResponse(BaseModel):
     """Agent response model"""
     agent: Agent
+    success: bool = True
+
+
+class AgentCreateResponse(BaseModel):
+    """Agent creation response model with optional private key"""
+    agent: Agent
+    private_key: Optional[str] = None
     success: bool = True
 
 

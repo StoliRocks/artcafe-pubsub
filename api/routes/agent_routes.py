@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from auth import get_current_tenant_id
-from models import AgentCreate, AgentUpdate, AgentResponse, AgentsResponse
+from models import AgentCreate, AgentUpdate, AgentResponse, AgentCreateResponse, AgentsResponse
 from api.services import agent_service, usage_service
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -67,7 +67,7 @@ async def get_agent(
     return AgentResponse(agent=agent)
 
 
-@router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AgentCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent(
     agent_data: AgentCreate,
     tenant_id: str = Depends(get_current_tenant_id)
@@ -79,15 +79,15 @@ async def create_agent(
         agent_data: Agent data
         
     Returns:
-        Created agent
+        Created agent with private key if generated
     """
     # Track API call
     await usage_service.increment_api_calls(tenant_id)
     
     # Create agent
-    agent = await agent_service.create_agent(tenant_id, agent_data)
+    agent, private_key = await agent_service.create_agent(tenant_id, agent_data)
     
-    return AgentResponse(agent=agent)
+    return AgentCreateResponse(agent=agent, private_key=private_key)
 
 
 @router.put("/{agent_id}", response_model=AgentResponse)
