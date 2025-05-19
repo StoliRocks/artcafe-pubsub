@@ -111,6 +111,7 @@ class AgentService:
         Returns:
             Tuple of (Created agent, private key) - private key is None if not generated
         """
+        logger.error(f"DEBUG: create_agent called for tenant {tenant_id}")
         try:
             # Check usage limits
             current_count = len((await self.list_agents(tenant_id))["agents"])
