@@ -128,9 +128,10 @@ class AgentService:
             
             # Generate SSH keypair if no public key was provided
             private_key = None
-            logger.info(f"Checking public key for agent {agent_id}: {agent_dict.get('public_key')}")
+            logger.error(f"DEBUG: Starting SSH key generation check for agent {agent_id}")
+            logger.error(f"DEBUG: Public key value: {agent_dict.get('public_key')}")
             if not agent_dict.get("public_key"):
-                logger.info(f"No public key provided, generating SSH keypair for agent {agent_id}")
+                logger.error(f"DEBUG: No public key provided, will generate SSH keypair for agent {agent_id}")
                 try:
                     private_key, public_key = ssh_key_generator.generate_agent_keypair(
                         agent_data.name,
