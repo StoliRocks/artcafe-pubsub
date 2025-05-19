@@ -1,5 +1,5 @@
 from .agent import (
-    Agent, AgentCreate, AgentUpdate, AgentResponse, AgentsResponse, AgentMetadata
+    Agent, AgentCreate, AgentUpdate, AgentResponse, AgentCreateResponse, AgentsResponse, AgentMetadata
 )
 from .ssh_key import (
     SSHKey, SSHKeyCreate, SSHKeyResponse, SSHKeysResponse
@@ -25,7 +25,7 @@ from .base import BaseSchema
 from .tenant_limits import TenantLimits, TenantUsage, SubscriptionPlan, SUBSCRIPTION_PLANS
 
 __all__ = [
-    "Agent", "AgentCreate", "AgentUpdate", "AgentResponse", "AgentsResponse", "AgentMetadata",
+    "Agent", "AgentCreate", "AgentUpdate", "AgentResponse", "AgentCreateResponse", "AgentsResponse", "AgentMetadata",
     "SSHKey", "SSHKeyCreate", "SSHKeyResponse", "SSHKeysResponse",
     "Channel", "ChannelCreate", "ChannelResponse", "ChannelsResponse",
     "Tenant", "TenantCreate", "TenantResponse",

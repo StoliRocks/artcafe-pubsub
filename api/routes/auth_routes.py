@@ -13,6 +13,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 class ChallengeRequest(BaseModel):
     """Challenge request model"""
     agent_id: Optional[str] = None
+    tenant_id: Optional[str] = None  # For unauthenticated agent challenge
 
 
 class ChallengeResponse(BaseModel):
@@ -55,6 +56,34 @@ async def create_challenge(
     # Generate challenge
     challenge_data = await ssh_key_manager.generate_challenge(
         tenant_id=tenant_id,
+        agent_id=request.agent_id
+    )
+    
+    return ChallengeResponse(**challenge_data)
+
+
+@router.post("/agent/challenge", response_model=ChallengeResponse)
+async def create_agent_challenge(
+    request: ChallengeRequest
+):
+    """
+    Generate an authentication challenge for SSH key verification (agent auth).
+    
+    This is an unauthenticated endpoint specifically for agent initial authentication.
+    The tenant_id must be provided in the request body.
+    """
+    if not request.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant_id is required in request body"
+        )
+    
+    # Validate tenant exists
+    tenant = await validate_tenant(request.tenant_id)
+    
+    # Generate challenge
+    challenge_data = await ssh_key_manager.generate_challenge(
+        tenant_id=request.tenant_id,
         agent_id=request.agent_id
     )
     
