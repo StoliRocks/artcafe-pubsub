@@ -21,6 +21,7 @@ class AgentBase(BaseModel):
 
 class AgentCreate(AgentBase):
     """Agent creation model"""
+    type: str  # Required field for now  
     public_key: Optional[str] = None
 
 

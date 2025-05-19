@@ -128,18 +128,27 @@ class AgentService:
             
             # Generate SSH keypair if no public key was provided
             private_key = None
+            logger.info(f"Checking public key for agent {agent_id}: {agent_dict.get('public_key')}")
             if not agent_dict.get("public_key"):
-                logger.info(f"Generating SSH keypair for agent {agent_id}")
-                private_key, public_key = ssh_key_generator.generate_agent_keypair(
-                    agent_data.name,
-                    tenant_id
-                )
-                agent_dict["public_key"] = public_key
-                
-                # Generate fingerprint for the public key
-                key_bytes = public_key.encode('utf-8')
-                fingerprint = hashlib.sha256(key_bytes).hexdigest()
-                agent_dict["key_fingerprint"] = fingerprint
+                logger.info(f"No public key provided, generating SSH keypair for agent {agent_id}")
+                try:
+                    private_key, public_key = ssh_key_generator.generate_agent_keypair(
+                        agent_data.name,
+                        tenant_id
+                    )
+                    logger.info(f"Generated keypair for agent {agent_id}")
+                    agent_dict["public_key"] = public_key
+                    
+                    # Generate fingerprint for the public key
+                    key_bytes = public_key.encode('utf-8')
+                    fingerprint = hashlib.sha256(key_bytes).hexdigest()
+                    agent_dict["key_fingerprint"] = fingerprint
+                    logger.info(f"SSH keypair generated successfully for agent {agent_id}")
+                except Exception as e:
+                    logger.error(f"Error generating SSH keypair for agent {agent_id}: {e}")
+                    # Continue without SSH key
+            else:
+                logger.info(f"Public key already provided for agent {agent_id}")
             
             # Store in DynamoDB
             item = await dynamodb.put_item(
