@@ -49,6 +49,22 @@ setup_middleware(app)
 # Include API routes
 app.include_router(router)
 
+# Add a simple test WebSocket for debugging
+from fastapi import WebSocket
+
+@app.websocket("/ws-test")
+async def test_websocket(websocket: WebSocket):
+    """Simple test WebSocket endpoint"""
+    await websocket.accept()
+    await websocket.send_text("Connected to test WebSocket!")
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"Echo: {data}")
+    except Exception as e:
+        print(f"WebSocket test error: {e}")
+
 
 @app.get("/")
 async def root():
