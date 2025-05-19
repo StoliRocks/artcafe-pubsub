@@ -33,6 +33,14 @@ class VerifyRequest(BaseModel):
     agent_id: Optional[str] = None
 
 
+class AgentVerifyRequest(BaseModel):
+    """Agent verification request model"""
+    tenant_id: str
+    agent_id: str
+    challenge: str
+    response: str
+
+
 class VerifyResponse(BaseModel):
     """Verification response model"""
     valid: bool
@@ -88,6 +96,56 @@ async def create_agent_challenge(
     )
     
     return ChallengeResponse(**challenge_data)
+
+
+@router.post("/agent/verify", response_model=VerifyResponse)
+async def verify_agent_challenge(request: AgentVerifyRequest):
+    """
+    Verify a signed challenge response for an agent.
+
+    This endpoint verifies that the signature provided by the agent matches the
+    expected signature for the challenge, using the public key stored with the agent.
+    """
+    # Validate tenant
+    tenant = await validate_tenant(request.tenant_id)
+    
+    # Import agent auth
+    from auth.ssh_auth_agent_fixed import agent_ssh_auth
+    
+    # Verify challenge response using agent's public key
+    valid = await agent_ssh_auth.verify_agent_challenge(
+        tenant_id=request.tenant_id,
+        agent_id=request.agent_id,  # Use agent_id directly
+        challenge=request.challenge,
+        response=request.response
+    )
+    
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid signature"
+        )
+    
+    # Generate JWT token for the agent
+    from auth.jwt_handler import create_access_token
+    from datetime import timedelta
+    
+    # Create token with agent context
+    token_data = {
+        "sub": request.agent_id,
+        "tenant_id": request.tenant_id,
+        "type": "agent",
+        "agent_id": request.agent_id,
+        "exp": datetime.utcnow() + timedelta(hours=24)
+    }
+    
+    access_token = create_access_token(data=token_data)
+    
+    return VerifyResponse(
+        valid=True,
+        message="Authentication successful",
+        token=access_token
+    )
 
 
 @router.post("/verify", response_model=VerifyResponse)
