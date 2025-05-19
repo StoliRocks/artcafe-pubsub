@@ -55,15 +55,21 @@ from fastapi import WebSocket
 @app.websocket("/ws-test")
 async def test_websocket(websocket: WebSocket):
     """Simple test WebSocket endpoint"""
-    await websocket.accept()
-    await websocket.send_text("Connected to test WebSocket!")
+    logger.info("[TEST] WebSocket connection attempt")
     
     try:
+        await websocket.accept()
+        logger.info("[TEST] WebSocket accepted")
+        await websocket.send_text("Connected to test WebSocket!")
+        
         while True:
             data = await websocket.receive_text()
+            logger.info(f"[TEST] Received: {data}")
             await websocket.send_text(f"Echo: {data}")
     except Exception as e:
-        print(f"WebSocket test error: {e}")
+        logger.error(f"[TEST] WebSocket error: {e}")
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close()
 
 
 @app.get("/")
