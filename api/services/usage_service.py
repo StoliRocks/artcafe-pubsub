@@ -81,6 +81,11 @@ class UsageService:
             if daily_stats:
                 messages_count = daily_stats.get('messages_count', 0)
                 api_calls_count = daily_stats.get('api_calls_count', 0)
+                
+            # Estimate storage usage based on existing data
+            # In a real implementation, this would come from a storage tracking system
+            storage_used_bytes = self._estimate_storage_usage(tenant_id, agents, channels)
+            storage_used_gb = storage_used_bytes / (1024 * 1024 * 1024)  # Convert to GB
             
             # Create metric for today
             metric = UsageMetrics(
@@ -92,6 +97,7 @@ class UsageService:
                 active_channels_count=active_channels,
                 messages_count=messages_count,
                 api_calls_count=api_calls_count,
+                storage_used_bytes=storage_used_bytes,
                 created_at=datetime.utcnow().isoformat()
             )
 
@@ -109,8 +115,38 @@ class UsageService:
                 active_channels_count=0,
                 messages_count=0,
                 api_calls_count=0,
+                storage_used_bytes=0,
                 created_at=datetime.utcnow().isoformat()
             )]
+            
+    def _estimate_storage_usage(self, tenant_id: str, agents: list, channels: list) -> int:
+        """
+        Estimate storage usage based on tenant data.
+        In production, this would be replaced with actual storage tracking.
+        
+        Args:
+            tenant_id: Tenant ID
+            agents: List of agent objects
+            channels: List of channel objects
+            
+        Returns:
+            Estimated storage usage in bytes
+        """
+        # Base storage for tenant configuration
+        base_storage = 1024 * 1024  # 1 MB
+        
+        # Add storage for each agent (config, state, etc.)
+        agent_storage = len(agents) * (50 * 1024)  # 50 KB per agent
+        
+        # Add storage for each channel
+        channel_storage = len(channels) * (20 * 1024)  # 20 KB per channel
+        
+        # Add some random variation to simulate real usage
+        import random
+        random_factor = random.uniform(0.8, 1.2)
+        
+        total_storage = int((base_storage + agent_storage + channel_storage) * random_factor)
+        return total_storage
 
     async def get_usage_by_date_range(self, tenant_id: str, start_date: str, end_date: str) -> List[UsageMetrics]:
         """

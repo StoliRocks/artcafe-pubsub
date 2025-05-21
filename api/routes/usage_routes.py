@@ -4,14 +4,17 @@ Routes for usage metrics.
 This module provides API routes for usage metrics and billing information.
 """
 
-from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from typing import Optional, Dict, List, Any
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from datetime import datetime, date, timedelta
 
 from auth.tenant_auth import get_tenant_id, validate_tenant
 from models.usage import UsageMetricsResponse, UsageLimits
 from api.services.usage_service import usage_service
 from api.services.tenant_service import tenant_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/usage-metrics", tags=["Usage"])
 
@@ -119,6 +122,11 @@ async def get_billing_info(
         end_date=today.isoformat()
     )
 
+    # Get current storage usage from metrics
+    storage_gb = 0
+    if metrics and len(metrics) > 0:
+        storage_gb = metrics[0].storage_used_bytes / (1024 * 1024 * 1024)  # Convert bytes to GB
+        
     # Get billing info from tenant
     return {
         "tenant_id": tenant_id,
@@ -133,13 +141,96 @@ async def get_billing_info(
             "agents": totals.agents_total if totals else 0,
             "channels": totals.channels_total if totals else 0,
             "messages": totals.messages_in_total if totals else 0,
-            "api_calls": totals.api_calls_count if hasattr(totals, 'api_calls_count') else 0
+            "api_calls": totals.api_calls_count if hasattr(totals, 'api_calls_count') else 0,
+            "storage_gb": round(storage_gb, 2)  # Round to 2 decimal places
         },
         "limits": {
             "agents": tenant.max_agents,
             "channels": tenant.max_channels,
             "messages_per_day": tenant.max_messages_per_day,
-            "api_calls_per_day": tenant.max_messages_per_day // 5
+            "api_calls_per_day": tenant.max_messages_per_day // 5,
+            "storage_gb": 10  # Default 10GB storage limit
         },
         "success": True
+    }
+    
+    
+@router.get("/historical", tags=["Usage"])
+async def get_historical_metrics(
+    tenant_id: str = Depends(get_tenant_id),
+    timeframe: str = Query("7d", description="Time period (24h, 7d, 30d)"),
+    metric: str = Query("messages", description="Metric to retrieve (messages, agents, api_calls)")
+):
+    """
+    Get historical usage metrics by timeframe and metric.
+    
+    Note: This is a placeholder that returns empty data, as historical metrics are not
+    currently tracked. Real implementation will be added in a future update.
+    
+    Args:
+        tenant_id: Tenant ID
+        timeframe: Time period (24h, 7d, 30d)
+        metric: Metric to retrieve (messages, agents, api_calls)
+        
+    Returns:
+        Empty historical metrics in the expected format
+    """
+    # Validate tenant
+    tenant = await validate_tenant(tenant_id)
+    
+    # Track API call
+    await usage_service.increment_api_calls(tenant_id)
+    
+    # Calculate start and end dates based on timeframe
+    today = date.today()
+    end_date = today
+    
+    if timeframe == "24h":
+        start_date = today - timedelta(days=1)
+        # For hourly data
+        empty_data = []
+        for hour in range(24):
+            hour_str = f"{hour:02d}:00"
+            empty_data.append({
+                "hour": hour_str,
+                "date": today.isoformat(),
+                metric: 0,
+                "timestamp": f"{today.isoformat()}T{hour_str}:00Z"
+            })
+        return {
+            "hourly_data": empty_data,
+            "daily_data": [],
+            "metric": metric,
+            "timeframe": timeframe,
+            "success": True,
+            "message": "Historical data not available yet. Coming soon!",
+            "tenant_id": tenant_id
+        }
+    elif timeframe == "7d":
+        start_date = today - timedelta(days=6)
+    elif timeframe == "30d":
+        start_date = today - timedelta(days=29)
+    else:
+        start_date = today - timedelta(days=6)  # Default to 7d
+    
+    # Generate empty daily data for the date range
+    empty_data = []
+    current_date = start_date
+    while current_date <= end_date:
+        empty_data.append({
+            "date": current_date.isoformat(),
+            metric: 0,
+            "timestamp": f"{current_date.isoformat()}T00:00:00Z"
+        })
+        current_date += timedelta(days=1)
+    
+    # Return empty data with appropriate message
+    return {
+        "daily_data": empty_data,
+        "hourly_data": [],
+        "metric": metric,
+        "timeframe": timeframe,
+        "success": True,
+        "message": "Historical data not available yet. Coming soon!",
+        "tenant_id": tenant_id
     }
