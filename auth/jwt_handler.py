@@ -2,10 +2,13 @@ import time
 import json
 import requests
 from typing import Dict, Optional, List
+import logging
 import jwt
 from datetime import datetime, timedelta
 from jwt.algorithms import RSAAlgorithm
 from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 
 from config.settings import settings
 
@@ -103,6 +106,20 @@ def decode_token(token: str) -> Dict:
     """
     # Decode header to check algorithm
     try:
+        logger.debug(f"Decoding JWT token: {token[:20]}...")
+        
+        # Log the token structure
+        if '.' in token:
+            header_part = token.split('.')[0]
+            from base64 import b64decode
+            import json
+            try:
+                padded = header_part + '=' * (4 - len(header_part) % 4)
+                header = json.loads(b64decode(padded).decode('utf-8'))
+                logger.debug(f"Token header: {header}")
+            except Exception as e:
+                logger.debug(f"Could not decode token header: {e}")
+        
         unverified_header = jwt.get_unverified_header(token)
         algorithm = unverified_header.get('alg', '')
         

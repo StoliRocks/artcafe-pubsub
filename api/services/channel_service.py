@@ -7,6 +7,7 @@ from ..db import dynamodb
 from config.settings import settings
 from models import Channel, ChannelCreate
 from nats_client import nats_manager, subjects
+from .limits_service import limits_service
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,10 @@ class ChannelService:
             Created channel
         """
         try:
+            # Check usage limits
+            current_count = len((await self.list_channels(tenant_id))["channels"])
+            await limits_service.enforce_limit(tenant_id, "channels", current_count)
+            
             # Generate channel ID
             channel_id = str(ulid.ULID())
             

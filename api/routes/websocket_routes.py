@@ -19,6 +19,25 @@ from infrastructure.metrics_service import metrics_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["WebSockets"])
+@router.websocket("/ws-debug")
+async def websocket_debug_endpoint(websocket: WebSocket):
+    # Debug endpoint with no authentication for testing
+    logger.info("WebSocket DEBUG connection attempt")
+    try:
+        await websocket.accept()
+        logger.info("WebSocket DEBUG connection accepted")
+        
+        try:
+            while True:
+                data = await websocket.receive_text()
+                logger.info(f"WebSocket DEBUG received: {data}")
+                await websocket.send_text(f"Echo: {data}")
+        except Exception as e:
+            logger.error(f"WebSocket DEBUG error: {e}")
+    except Exception as e:
+        logger.error(f"WebSocket DEBUG connection error: {e}")
+
+
 
 # Connect clients - Used to keep track of connected WebSocket clients
 # Structure: {"tenant_id": {"agent_id": {"channel_id": WebSocket}}}

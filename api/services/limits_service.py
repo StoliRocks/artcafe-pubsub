@@ -85,7 +85,7 @@ class LimitsService:
         
         Args:
             tenant_id: Tenant ID
-            metric: Metric to track (messages_today, api_calls_this_minute)
+            metric: Metric to track (messages_this_month, api_calls_this_minute)
             increment: Amount to increment
         """
         try:
@@ -97,11 +97,12 @@ class LimitsService:
             current_value = getattr(tenant.usage, metric, 0)
             setattr(tenant.usage, metric, current_value + increment)
             
-            # Reset daily counters if needed
-            if metric == "messages_today":
-                if datetime.utcnow().date() > tenant.usage.last_reset.date():
-                    tenant.usage.messages_today = increment
-                    tenant.usage.last_reset = datetime.utcnow()
+            # Reset monthly counters if needed
+            if metric == "messages_this_month":
+                current_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                if tenant.usage.last_month_reset < current_month:
+                    tenant.usage.messages_this_month = increment
+                    tenant.usage.last_month_reset = datetime.utcnow()
             
             # Reset per-minute counters
             elif metric == "api_calls_this_minute":
@@ -146,13 +147,14 @@ class LimitsService:
             return tenant.usage.api_calls_this_minute < tenant.limits.max_api_calls_per_minute
         
         elif resource == "messages":
-            # Check daily message limit
-            if datetime.utcnow().date() > tenant.usage.last_reset.date():
+            # Check monthly message limit
+            current_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            if tenant.usage.last_month_reset < current_month:
                 # Reset counter
-                tenant.usage.messages_today = 0
-                tenant.usage.last_reset = datetime.utcnow()
+                tenant.usage.messages_this_month = 0
+                tenant.usage.last_month_reset = datetime.utcnow()
             
-            return tenant.usage.messages_today < tenant.limits.max_messages_per_day
+            return tenant.usage.messages_this_month < tenant.limits.max_messages_per_month
         
         return True
     
@@ -193,10 +195,10 @@ class LimitsService:
                     "limit": tenant.limits.max_ssh_keys,
                     "percentage": (ssh_key_count / tenant.limits.max_ssh_keys * 100) if tenant.limits.max_ssh_keys > 0 else 0
                 },
-                "messages_today": {
-                    "current": tenant.usage.messages_today,
-                    "limit": tenant.limits.max_messages_per_day,
-                    "percentage": (tenant.usage.messages_today / tenant.limits.max_messages_per_day * 100) if tenant.limits.max_messages_per_day > 0 else 0
+                "messages_this_month": {
+                    "current": tenant.usage.messages_this_month,
+                    "limit": tenant.limits.max_messages_per_month,
+                    "percentage": (tenant.usage.messages_this_month / tenant.limits.max_messages_per_month * 100) if tenant.limits.max_messages_per_month > 0 else 0
                 },
                 "storage_gb": {
                     "current": tenant.usage.storage_used_gb,

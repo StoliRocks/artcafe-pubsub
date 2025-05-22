@@ -30,6 +30,10 @@ async def get_tenant_id(
     Raises:
         HTTPException: If tenant ID is not found or invalid
     """
+    # Enhanced logging for tenant extraction
+    logger.debug(f"Extracting tenant ID from request")
+    
+    # Check if tenant_id exists in the request
     # First try to get tenant ID from headers
     tenant_id = request.headers.get(settings.TENANT_ID_HEADER_NAME)
     
@@ -66,6 +70,7 @@ async def get_tenant_id(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    logger.debug(f"Extracted tenant ID: {tenant_id}")
     return tenant_id
 
 
@@ -84,48 +89,54 @@ async def validate_tenant(
     Raises:
         HTTPException: If tenant is not found or subscription is invalid
     """
-    # Get tenant from database
-    tenant = await get_tenant(tenant_id)
-    
-    if not tenant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Tenant not found"
-        )
-    
-    # Check tenant status
-    if tenant.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Tenant is not active. Current status: {tenant.status}"
-        )
-    
-    # Check payment status
-    if tenant.payment_status == "expired":
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Subscription has expired"
-        )
-    
-    if tenant.payment_status == "inactive":
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Subscription is inactive"
-        )
-    
-    # Check if trial or subscription has expired
-    now = datetime.utcnow()
-    if tenant.subscription_expires_at and tenant.subscription_expires_at < now:
-        # Update tenant payment status to expired
-        # This should be done in a background task to avoid blocking the request
-        # await tenant_service.update_payment_status(tenant_id, "expired")
+    try:
+        logger.debug(f"Validating tenant: {tenant_id}")
+        # Get tenant from database
+        tenant = await get_tenant(tenant_id)
         
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Subscription has expired"
-        )
-    
-    return tenant
+        if not tenant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tenant not found"
+            )
+        
+        # Check tenant status
+        if tenant.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Tenant is not active. Current status: {tenant.status}"
+            )
+        
+        # Check payment status
+        if tenant.payment_status == "expired":
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Subscription has expired"
+            )
+        
+        if tenant.payment_status == "inactive":
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Subscription is inactive"
+            )
+        
+        # Check if trial or subscription has expired
+        now = datetime.utcnow()
+        if tenant.subscription_expires_at and tenant.subscription_expires_at < now:
+            # Update tenant payment status to expired
+            # This should be done in a background task to avoid blocking the request
+            # await tenant_service.update_payment_status(tenant_id, "expired")
+            
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Subscription has expired"
+            )
+        
+        logger.debug(f"Tenant validation successful: {tenant.id}")
+        return tenant
+    except Exception as e:
+        logger.error(f"Tenant validation error for {tenant_id}: {e}")
+        raise
 
 
 async def check_tenant_limits(
@@ -133,163 +144,47 @@ async def check_tenant_limits(
     tenant: dict = Depends(validate_tenant)
 ) -> dict:
     """
-    Check if the tenant has reached their usage limits.
+    Check if the tenant has reached its usage limits.
     
     Args:
-        request_type: The type of request being made (agent, channel, message, api_call, storage, connection)
-        tenant: Validated tenant object
+        request_type: The type of request being made
+        tenant: The tenant to check
         
     Returns:
-        Tenant object if within limits
+        Tenant object if limits are not exceeded
         
     Raises:
-        HTTPException: If tenant has exceeded their limits
+        HTTPException: If tenant has exceeded usage limits
     """
-    # Import here to avoid circular imports
-    from api.services.agent_service import agent_service
-    from api.services.channel_service import channel_service
-    from api.services.usage_service import usage_service
-    from infrastructure.metrics_service import metrics_service
+    # Skip limit checks in debug mode or if tenant is a superuser
+    if settings.DEBUG or tenant.get("is_superuser", False):
+        return tenant
     
-    tenant_id = tenant.tenant_id
+    # Check tenant limits based on request type
+    if request_type == "agent":
+        # Check if tenant has reached agent limit
+        if tenant.limits.max_agents > 0 and tenant.usage.total_agents >= tenant.limits.max_agents:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Agent limit reached: {tenant.usage.total_agents}/{tenant.limits.max_agents}"
+            )
     
-    try:
-        # Get current usage totals
-        usage_totals = await usage_service.get_usage_totals(tenant_id)
-        today = datetime.utcnow().date().isoformat()
-        
-        # Get today's metrics
-        daily_metrics = await usage_service.get_usage_metrics(
-            tenant_id, 
-            start_date=today,
-            end_date=today
-        )
-        
-        # If we have metrics for today, use them; otherwise create empty metrics
-        daily_metric = daily_metrics[0] if daily_metrics else None
-        
-        # Usage limits based on subscription tier
-        if request_type == "agent":
-            # Get current agent count
-            if hasattr(agent_service, 'get_agent_count'):
-                agent_count = await agent_service.get_agent_count(tenant_id)
-            else:
-                # Fallback to metrics if agent_service doesn't have the method
-                agent_count = usage_totals.agents_total if usage_totals else 0
-            
-            # Check against limit
-            if agent_count >= tenant.max_agents:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Agent limit reached. Maximum allowed: {tenant.max_agents}, Current: {agent_count}",
-                    headers={"x-rate-limit-reset": "86400"}  # Reset in 24 hours
-                )
-        
-        elif request_type == "channel":
-            # Get current channel count
-            if hasattr(channel_service, 'get_channel_count'):
-                channel_count = await channel_service.get_channel_count(tenant_id)
-            else:
-                # Fallback to metrics if channel_service doesn't have the method
-                channel_count = usage_totals.channels_total if usage_totals else 0
-            
-            # Check against limit
-            if channel_count >= tenant.max_channels:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Channel limit reached. Maximum allowed: {tenant.max_channels}, Current: {channel_count}",
-                    headers={"x-rate-limit-reset": "86400"}  # Reset in 24 hours
-                )
-        
-        elif request_type == "message":
-            # Get daily message count
-            message_count = 0
-            if daily_metric:
-                message_count = daily_metric.messages_count
-            
-            # Pre-check against a percentage of the limit to allow for some buffer
-            # (90% of limit as a warning threshold)
-            warning_threshold = tenant.max_messages_per_day * 0.9
-            if message_count >= warning_threshold:
-                logger.warning(
-                    f"Tenant {tenant_id} approaching message limit: {message_count}/{tenant.max_messages_per_day}"
-                )
-            
-            # Check against limit
-            if message_count >= tenant.max_messages_per_day:
-                # Calculate seconds until limit reset (midnight UTC)
-                now = datetime.utcnow()
-                tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                seconds_until_reset = int((tomorrow - now).total_seconds())
-                
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Daily message limit reached. Maximum allowed: {tenant.max_messages_per_day}, Current: {message_count}",
-                    headers={"x-rate-limit-reset": str(seconds_until_reset)}
-                )
-        
-        elif request_type == "api_call":
-            # Get daily API call count
-            api_call_count = 0
-            if daily_metric:
-                api_call_count = daily_metric.api_calls_count
-            
-            # Check against limit (if defined)
-            max_api_calls = getattr(tenant, 'max_api_calls_per_day', 10000)  # Default if not defined
-            
-            # Warning at 90% of limit
-            warning_threshold = max_api_calls * 0.9
-            if api_call_count >= warning_threshold:
-                logger.warning(
-                    f"Tenant {tenant_id} approaching API call limit: {api_call_count}/{max_api_calls}"
-                )
-            
-            if api_call_count >= max_api_calls:
-                # Calculate seconds until limit reset (midnight UTC)
-                now = datetime.utcnow()
-                tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                seconds_until_reset = int((tomorrow - now).total_seconds())
-                
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Daily API call limit reached. Maximum allowed: {max_api_calls}, Current: {api_call_count}",
-                    headers={"x-rate-limit-reset": str(seconds_until_reset)}
-                )
-        
-        elif request_type == "storage":
-            # Get current storage usage
-            storage_bytes = 0
-            if daily_metric and hasattr(daily_metric, 'storage_used_bytes'):
-                storage_bytes = daily_metric.storage_used_bytes
-            
-            # Check against limit (if defined)
-            max_storage_bytes = getattr(tenant, 'max_storage_bytes', 1073741824)  # Default 1GB if not defined
-            
-            if storage_bytes >= max_storage_bytes:
-                raise HTTPException(
-                    status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
-                    detail=f"Storage limit reached. Maximum allowed: {max_storage_bytes} bytes, Current: {storage_bytes} bytes"
-                )
-        
-        elif request_type == "connection":
-            # Get current connection count from metrics service
-            connection_count = metrics_service.get_tenant_connection_count(tenant_id)
-            
-            # Check against limit (if defined)
-            max_connections = getattr(tenant, 'concurrent_connections', 50)  # Default if not defined
-            
-            if connection_count >= max_connections:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Connection limit reached. Maximum allowed: {max_connections}, Current: {connection_count}"
-                )
+    elif request_type == "channel":
+        # Check if tenant has reached channel limit
+        if tenant.limits.max_channels > 0 and tenant.usage.total_channels >= tenant.limits.max_channels:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Channel limit reached: {tenant.usage.total_channels}/{tenant.limits.max_channels}"
+            )
     
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
-    except Exception as e:
-        # Log other exceptions but allow the request to proceed
-        logger.error(f"Error checking tenant limits: {e}")
-        
-    # If no limits exceeded, return the tenant
+    elif request_type == "ssh_key":
+        # Check if tenant has reached SSH key limit
+        if tenant.limits.max_ssh_keys > 0 and tenant.usage.total_ssh_keys >= tenant.limits.max_ssh_keys:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"SSH key limit reached: {tenant.usage.total_ssh_keys}/{tenant.limits.max_ssh_keys}"
+            )
+    
+    # Add other limit checks as needed
+    
     return tenant

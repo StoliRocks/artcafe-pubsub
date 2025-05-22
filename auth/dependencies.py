@@ -1,7 +1,10 @@
 from typing import Optional, Dict
+import logging
 from fastapi import Depends, HTTPException, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
+
+logger = logging.getLogger(__name__)
 
 from .jwt_handler import decode_token, validate_cognito_token
 from config.settings import settings
@@ -230,3 +233,72 @@ async def get_authorization_headers(
         settings.TENANT_ID_HEADER_NAME: tenant_id,
         settings.API_KEY_HEADER_NAME: api_key,
     }
+
+async def get_token_from_websocket(websocket):
+    # Helper function to extract token from WebSocket request
+    logger.debug("Extracting token from WebSocket connection")
+    
+    # Try query parameter first
+    token = websocket.query_params.get("token")
+    if token:
+        logger.debug(f"Found token in query parameters: {token[:10]}...")
+        return token
+    
+    # Try Authorization header
+    auth_header = websocket.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header.replace("Bearer ", "")
+        logger.debug(f"Found token in Authorization header: {token[:10]}...")
+        return token
+    
+    # Try x-api-key header
+    api_key = websocket.headers.get("x-api-key")
+    if api_key:
+        logger.debug("Found API key in headers")
+        return api_key
+    
+    logger.warning("No token found in WebSocket connection")
+    return None
+
+async def get_tenant_from_websocket_token(websocket, token):
+    # Extract tenant and agent info from WebSocket token
+    from auth.jwt_handler import decode_token
+    
+    try:
+        logger.debug(f"Decoding WebSocket token: {token[:10] if token else None}...")
+        
+        if not token:
+            logger.error("No token provided for WebSocket connection")
+            return None, None
+        
+        # Decode the token
+        payload = decode_token(token)
+        logger.debug(f"Token payload: {payload}")
+        
+        # Extract tenant_id from different possible locations
+        tenant_id = payload.get("tenant_id")
+        
+        # Try alternate locations
+        if not tenant_id:
+            tenant_id = payload.get("custom:tenant_id")
+        if not tenant_id:
+            tenant_id = payload.get("org_id")
+        if not tenant_id:
+            tenant_id = payload.get("organization_id")
+        
+        # Extract agent_id or fallback to sub
+        agent_id = payload.get("agent_id")
+        if not agent_id:
+            agent_id = payload.get("sub")
+        
+        logger.debug(f"Extracted tenant_id: {tenant_id}, agent_id: {agent_id}")
+        
+        # Validate tenant if needed
+        from auth.tenant_auth import validate_tenant
+        await validate_tenant(tenant_id)
+        
+        return tenant_id, agent_id
+        
+    except Exception as e:
+        logger.error(f"Error extracting tenant from WebSocket token: {e}")
+        return None, None

@@ -9,6 +9,7 @@ from models import SSHKey, SSHKeyCreate
 from models.ssh_key import KeyType
 from nats_client import nats_manager, subjects
 from auth.ssh_auth import SSHKeyManager
+from .limits_service import limits_service
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,10 @@ class SSHKeyService:
             Created SSH key
         """
         try:
+            # Check usage limits
+            current_count = len((await self.list_ssh_keys(tenant_id))["ssh_keys"])
+            await limits_service.enforce_limit(tenant_id, "ssh_keys", current_count)
+            
             # Generate key ID
             key_id = str(ulid.ULID())
 
