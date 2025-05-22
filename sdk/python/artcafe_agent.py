@@ -3,6 +3,9 @@ ArtCafe.ai Agent SDK for Python
 
 This module provides a client implementation for ArtCafe.ai agents to
 connect to the PubSub service.
+
+NOTE: This is the legacy SDK. For new agents, use artcafe_agent_v2.py
+which supports the new AgentMessage protocol.
 """
 
 import asyncio

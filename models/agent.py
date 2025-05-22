@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -13,9 +13,22 @@ class AgentMetadata(BaseModel):
     custom: Optional[Dict] = None
 
 
+class AgentCapabilityDefinition(BaseModel):
+    """Agent capability definition"""
+    name: str
+    version: str = "1.0"
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    models: List[str] = Field(default_factory=list)  # Supported LLM models
+    max_concurrent: int = 1
+    average_duration_ms: Optional[int] = None
+
+
 class AgentBase(BaseModel):
     """Base agent model"""
     name: str
+    capabilities: List[str] = Field(default_factory=list)  # List of capability names
+    capability_definitions: Optional[List[AgentCapabilityDefinition]] = None  # Full capability definitions
     metadata: Optional[AgentMetadata] = Field(default_factory=AgentMetadata)
 
 
@@ -45,6 +58,15 @@ class Agent(AgentBase, BaseSchema):
     active_connections: int = 0
     total_messages_sent: int = 0
     total_messages_received: int = 0
+    
+    # Performance tracking
+    average_response_time_ms: Optional[float] = None
+    success_rate: Optional[float] = None  # Percentage of successful task completions
+    
+    # Resource limits
+    max_concurrent_tasks: int = 5
+    max_memory_mb: Optional[int] = None
+    max_cpu_percent: Optional[int] = None
     
     class Config:
         allow_population_by_field_name = True

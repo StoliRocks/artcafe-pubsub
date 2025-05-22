@@ -127,6 +127,15 @@ class AgentService:
             agent_dict["status"] = "offline"  # Initial status is always offline
             agent_dict["last_seen"] = datetime.utcnow().isoformat()
             
+            # Initialize capabilities if not provided
+            if "capabilities" not in agent_dict:
+                agent_dict["capabilities"] = []
+            
+            # Initialize performance metrics
+            agent_dict["average_response_time_ms"] = None
+            agent_dict["success_rate"] = None
+            agent_dict["max_concurrent_tasks"] = 5
+            
             # Generate SSH keypair if no public key was provided
             private_key = None
             logger.error(f"DEBUG: Starting SSH key generation check for agent {agent_id}")
@@ -246,6 +255,173 @@ class AgentService:
         except Exception as e:
             logger.error(f"Error deleting agent {agent_id} for tenant {tenant_id}: {e}")
             raise
+    
+    async def update_agent_capabilities(
+        self, 
+        tenant_id: str, 
+        agent_id: str, 
+        capabilities: List[str],
+        capability_definitions: Optional[List[Dict]] = None
+    ) -> Optional[Agent]:
+        """
+        Update agent capabilities
+        
+        Args:
+            tenant_id: Tenant ID
+            agent_id: Agent ID
+            capabilities: List of capability names
+            capability_definitions: Optional full capability definitions
+            
+        Returns:
+            Updated agent or None if not found
+        """
+        try:
+            # Check if agent exists
+            existing_agent = await self.get_agent(tenant_id, agent_id)
+            if not existing_agent:
+                return None
+            
+            # Prepare update data
+            update_data = {
+                "capabilities": capabilities,
+                "last_seen": datetime.utcnow().isoformat()
+            }
+            
+            if capability_definitions:
+                update_data["capability_definitions"] = capability_definitions
+            
+            # Update agent in DynamoDB
+            updated_item = await dynamodb.update_item(
+                table_name=settings.AGENT_TABLE_NAME,
+                key={"tenant_id": tenant_id, "id": agent_id},
+                updates=update_data
+            )
+            
+            # Convert to Agent model
+            updated_agent = Agent(**updated_item)
+            
+            # Publish capability update event
+            await self._publish_agent_capability_update_event(tenant_id, agent_id, capabilities)
+            
+            return updated_agent
+            
+        except Exception as e:
+            logger.error(f"Error updating capabilities for agent {agent_id}: {e}")
+            raise
+    
+    async def get_agents_by_capability(
+        self, 
+        tenant_id: str, 
+        capability: str,
+        status: Optional[str] = "online"
+    ) -> List[Agent]:
+        """
+        Get agents with a specific capability
+        
+        Args:
+            tenant_id: Tenant ID
+            capability: Capability name
+            status: Optional status filter (default: online)
+            
+        Returns:
+            List of agents with the capability
+        """
+        try:
+            # Query agents
+            filter_parts = ["tenant_id = :tenant_id", "contains(capabilities, :capability)"]
+            expression_values = {
+                ":tenant_id": tenant_id,
+                ":capability": capability
+            }
+            
+            if status:
+                filter_parts.append("status = :status")
+                expression_values[":status"] = status
+            
+            filter_expression = " AND ".join(filter_parts)
+            
+            # Query DynamoDB
+            result = await dynamodb.scan_items(
+                table_name=settings.AGENT_TABLE_NAME,
+                filter_expression=filter_expression,
+                expression_values=expression_values
+            )
+            
+            # Convert to Agent models
+            agents = [Agent(**item) for item in result["items"]]
+            
+            return agents
+            
+        except Exception as e:
+            logger.error(f"Error getting agents by capability {capability}: {e}")
+            raise
+    
+    async def update_agent_performance_metrics(
+        self,
+        tenant_id: str,
+        agent_id: str,
+        response_time_ms: float,
+        success: bool
+    ) -> None:
+        """
+        Update agent performance metrics
+        
+        Args:
+            tenant_id: Tenant ID
+            agent_id: Agent ID
+            response_time_ms: Response time in milliseconds
+            success: Whether the task was successful
+        """
+        try:
+            # Get current agent
+            agent = await self.get_agent(tenant_id, agent_id)
+            if not agent:
+                return
+            
+            # Calculate new metrics
+            current_avg = agent.average_response_time_ms or response_time_ms
+            current_success_rate = agent.success_rate or (100.0 if success else 0.0)
+            
+            # Simple moving average (last 10 samples)
+            new_avg = (current_avg * 0.9) + (response_time_ms * 0.1)
+            new_success_rate = (current_success_rate * 0.9) + ((100.0 if success else 0.0) * 0.1)
+            
+            # Update metrics
+            await dynamodb.update_item(
+                table_name=settings.AGENT_TABLE_NAME,
+                key={"tenant_id": tenant_id, "id": agent_id},
+                updates={
+                    "average_response_time_ms": new_avg,
+                    "success_rate": new_success_rate,
+                    "total_messages_sent": (agent.total_messages_sent or 0) + 1
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error updating performance metrics for agent {agent_id}: {e}")
+            # Don't raise - metrics are not critical
+    
+    async def _publish_agent_capability_update_event(
+        self, 
+        tenant_id: str, 
+        agent_id: str, 
+        capabilities: List[str]
+    ) -> None:
+        """Publish agent capability update event to NATS"""
+        try:
+            event = {
+                "event": "agent_capability_update",
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "capabilities": capabilities,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            subject = subjects.get_agent_event_subject(tenant_id, "capability", "update")
+            await nats_manager.publish(subject, event)
+            
+        except Exception as e:
+            logger.error(f"Error publishing capability update event: {e}")
             
     async def update_agent_status(self, tenant_id: str, agent_id: str, 
                                 status: str) -> Optional[Agent]:
