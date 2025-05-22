@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from auth import get_current_tenant_id
+from auth.dependencies import get_current_tenant_id
 from api.services import limits_service, tenant_service, usage_service
 from models import TenantLimits, TenantUsage, SUBSCRIPTION_PLANS
 

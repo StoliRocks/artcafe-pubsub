@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 from .jwt_handler import decode_token, validate_cognito_token
 from config.settings import settings
-from api.services.user_tenant_service import user_tenant_service
 from models.user_tenant import UserWithTenants
 
 # HTTP Bearer security scheme
@@ -97,6 +96,8 @@ async def get_current_user_with_tenants(
     user_id = user_data["user_id"]
     email = user_data["email"]
     
+    # Lazy import to avoid circular dependency
+    from api.services.user_tenant_service import user_tenant_service
     return await user_tenant_service.get_user_with_tenants(user_id, email)
 
 
@@ -138,6 +139,8 @@ async def get_current_tenant_id(
             user_id = payload.get("sub") or payload.get("user_id")
             if user_id:
                 # Try to get user's default tenant
+                # Lazy import to avoid circular dependency
+                from api.services.user_tenant_service import user_tenant_service
                 user_tenants = await user_tenant_service.get_user_tenants(user_id)
                 if user_tenants:
                     # Use the first tenant as default
@@ -180,6 +183,8 @@ async def verify_tenant_access(
         HTTPException: If user doesn't have access
     """
     # Check if user has access to this tenant
+    # Lazy import to avoid circular dependency
+    from api.services.user_tenant_service import user_tenant_service
     if await user_tenant_service.check_user_access(user.user_id, tenant_id):
         return tenant_id
     

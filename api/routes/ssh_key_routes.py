@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
-from auth import get_current_tenant_id
+from auth.dependencies import get_current_tenant_id
 from models import SSHKeyCreate, SSHKeyResponse, SSHKeysResponse
 from api.services import ssh_key_service, usage_service
 

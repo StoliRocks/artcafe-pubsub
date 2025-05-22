@@ -1,7 +1,7 @@
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status, Body
 
-from auth import get_current_tenant_id
+from auth.dependencies import get_current_tenant_id
 from models import ChannelCreate, ChannelResponse, ChannelsResponse
 from api.services import channel_service, usage_service
 
