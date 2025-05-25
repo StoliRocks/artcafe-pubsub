@@ -37,10 +37,11 @@ class SSHKeyGenerator:
                 backend=default_backend()
             )
             
-            # Generate private key in PEM format
+            # Generate private key in PEM format (PKCS#8)
+            # Using PKCS8 format which is what the SDK expects
             private_pem = private_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.OpenSSH,
+                format=serialization.PrivateFormat.PKCS8,
                 encryption_algorithm=serialization.NoEncryption()
             )
             

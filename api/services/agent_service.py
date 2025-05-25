@@ -239,6 +239,9 @@ class AgentService:
             if not existing_agent:
                 return False
                 
+            # Delete associated SSH keys
+            await self._delete_agent_ssh_keys(tenant_id, agent_id)
+                
             # Delete from DynamoDB
             await dynamodb.delete_item(
                 table_name=settings.AGENT_TABLE_NAME,
@@ -462,6 +465,45 @@ class AgentService:
         except Exception as e:
             logger.error(f"Error updating agent status for {agent_id}: {e}")
             raise
+    
+    async def _delete_agent_ssh_keys(self, tenant_id: str, agent_id: str) -> None:
+        """
+        Delete all SSH keys associated with an agent
+        
+        Args:
+            tenant_id: Tenant ID
+            agent_id: Agent ID
+        """
+        try:
+            # Query SSH keys for this agent
+            filter_expression = "tenant_id = :tenant_id AND agent_id = :agent_id"
+            expression_values = {
+                ":tenant_id": tenant_id,
+                ":agent_id": agent_id
+            }
+            
+            # Scan for all SSH keys belonging to this agent
+            result = await dynamodb.scan_items(
+                table_name=settings.SSH_KEY_TABLE_NAME,
+                filter_expression=filter_expression,
+                expression_values=expression_values
+            )
+            
+            # Delete each SSH key
+            for key_item in result.get("items", []):
+                key_id = key_item.get("id")
+                if key_id:
+                    await dynamodb.delete_item(
+                        table_name=settings.SSH_KEY_TABLE_NAME,
+                        key={"tenant_id": tenant_id, "id": key_id}
+                    )
+                    logger.info(f"Deleted SSH key {key_id} for agent {agent_id}")
+                    
+            logger.info(f"Deleted {len(result.get('items', []))} SSH keys for agent {agent_id}")
+            
+        except Exception as e:
+            logger.error(f"Error deleting SSH keys for agent {agent_id}: {e}")
+            # Don't raise - we still want to delete the agent even if SSH key cleanup fails
             
     # NATS event publishing methods
     async def _publish_agent_create_event(self, tenant_id: str, agent: Agent):

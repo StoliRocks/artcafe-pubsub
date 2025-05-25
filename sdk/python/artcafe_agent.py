@@ -123,11 +123,24 @@ class ArtCafeAgent:
         self.logger.info(f"Agent initialized: {agent_id} on {self.hostname}")
     
     def _load_private_key(self):
-        """Load private key from file"""
+        """Load private key from file (supports both OpenSSH and PKCS#8 formats)"""
         try:
             with open(self.private_key_path, 'rb') as key_file:
+                key_data = key_file.read()
+            
+            # Try to detect the key format
+            if b'-----BEGIN OPENSSH PRIVATE KEY-----' in key_data:
+                # OpenSSH format
+                self.logger.debug("Detected OpenSSH format private key")
+                self.private_key = serialization.load_ssh_private_key(
+                    key_data,
+                    password=None
+                )
+            else:
+                # Try PKCS#8 or PKCS#1 format
+                self.logger.debug("Attempting to load as PEM private key")
                 self.private_key = serialization.load_pem_private_key(
-                    key_file.read(),
+                    key_data,
                     password=None
                 )
             

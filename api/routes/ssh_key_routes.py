@@ -1,11 +1,54 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from pydantic import BaseModel
 
 from auth.dependencies import get_current_tenant_id
 from models import SSHKeyCreate, SSHKeyResponse, SSHKeysResponse
 from api.services import ssh_key_service, usage_service
+from utils.ssh_key_generator import ssh_key_generator
 
 router = APIRouter(prefix="/ssh-keys", tags=["ssh-keys"])
+
+
+class KeypairResponse(BaseModel):
+    """SSH keypair generation response"""
+    public_key: str
+    private_key: str
+    fingerprint: str
+
+
+@router.post("/generate", response_model=KeypairResponse)
+async def generate_ssh_keypair(
+    tenant_id: str = Depends(get_current_tenant_id)
+):
+    """
+    Generate a new SSH keypair
+    
+    Returns:
+        Generated public and private keys
+    """
+    # Track API call
+    await usage_service.increment_api_calls(tenant_id)
+    
+    try:
+        # Generate keypair
+        private_key, public_key = ssh_key_generator.generate_keypair()
+        
+        # Calculate fingerprint
+        from auth.ssh_auth import SSHKeyManager
+        key_manager = SSHKeyManager()
+        fingerprint = key_manager.calculate_fingerprint(public_key)
+        
+        return KeypairResponse(
+            public_key=public_key,
+            private_key=private_key,
+            fingerprint=fingerprint
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate SSH keypair: {str(e)}"
+        )
 
 
 @router.get("", response_model=SSHKeysResponse)

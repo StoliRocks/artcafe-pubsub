@@ -23,6 +23,9 @@ from .user_tenant import (
 )
 from .base import BaseSchema
 from .tenant_limits import TenantLimits, TenantUsage, SubscriptionPlan, SUBSCRIPTION_PLANS
+from .subscription import (
+    Subscription, SubscriptionCreate, SubscriptionResponse, SubscriptionTier, SubscriptionStatus
+)
 
 __all__ = [
     "Agent", "AgentCreate", "AgentUpdate", "AgentResponse", "AgentCreateResponse", "AgentsResponse", "AgentMetadata",
@@ -35,5 +38,6 @@ __all__ = [
     "UserTenant", "UserTenantCreate", "UserTenantUpdate", "UserRole",
     "UserWithTenants", "TenantWithUsers",
     "BaseSchema",
-    "TenantLimits", "TenantUsage", "SubscriptionPlan", "SUBSCRIPTION_PLANS"
+    "TenantLimits", "TenantUsage", "SubscriptionPlan", "SUBSCRIPTION_PLANS",
+    "Subscription", "SubscriptionCreate", "SubscriptionResponse", "SubscriptionTier", "SubscriptionStatus"
 ]
