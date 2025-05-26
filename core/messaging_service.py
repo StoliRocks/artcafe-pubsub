@@ -14,6 +14,7 @@ from models.agent_message import (
     MessageContext, MessagePayload, MessageRouting,
     StreamMetadata, AgentCapability, AgentAnnouncement
 )
+from api.services.usage_service import usage_service
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,14 @@ class MessagingService:
         
         # Publish message
         await self.nats_client.publish(subject, enriched_message, reply_to=reply_to, headers=headers)
+        
+        # Track message usage if tenant_id is available
+        if tenant_id or (headers and headers.get("tenant_id")):
+            try:
+                tid = tenant_id or headers.get("tenant_id")
+                await usage_service.increment_messages(tid)
+            except Exception as e:
+                logger.debug(f"Failed to track message usage: {e}")
         
         return message_id
     
@@ -454,6 +463,12 @@ class MessagingService:
             reply_to=message.reply_to,
             headers=headers
         )
+        
+        # Track message usage
+        try:
+            await usage_service.increment_messages(tenant_id)
+        except Exception as e:
+            logger.debug(f"Failed to track message usage: {e}")
         
         logger.info(f"Sent {message.type.value} message {message.id} to {subject}")
         

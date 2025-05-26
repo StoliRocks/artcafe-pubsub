@@ -1,164 +1,240 @@
-# ArtCafe.ai PubSub Service
+# ArtCafe PubSub Service
 
-A NATS-based pub/sub service for ArtCafe.ai that implements the API endpoints used by the frontend. This service facilitates agent communication, management, and messaging.
+## Overview
 
-## Features
+The ArtCafe PubSub Service is the core messaging backbone for the ArtCafe.ai platform, providing:
+- REST API endpoints for platform management
+- WebSocket connections for real-time communication
+- NATS integration for pub/sub messaging
+- Multi-tenant isolation
+- Two authentication methods: Cognito JWT for humans, SSH keys for agents
 
-- FastAPI service with endpoints matching the frontend API calls
-- NATS connection and client implementation
-- Authentication with JWT tokens
-- Multi-tenant support
-- DynamoDB persistence
-- Proper error handling
-- Test clients for validation
-
-## Project Structure
+## Architecture
 
 ```
-artcafe_pubsub/
-├── api/                # API endpoints and routes
-│   ├── app.py          # FastAPI application
-│   ├── lambda_handler.py # AWS Lambda handler
-│   └── router.py       # API routes
-├── auth/               # Authentication
-│   ├── jwt_auth.py     # JWT authentication
-│   └── ssh_auth.py     # SSH key management
-├── core/               # Core functionality
-│   ├── messaging_service.py # Messaging service
-│   └── nats_client.py  # NATS client
-├── infrastructure/     # Deployment and infrastructure
-│   ├── cloudformation.yml # AWS CloudFormation template
-│   ├── deploy.sh       # Deployment script
-│   └── dynamodb_service.py # DynamoDB service
-├── models/             # Data models
-│   ├── agent.py        # Agent models
-│   ├── channel.py      # Channel models
-│   ├── ssh_key.py      # SSH key models
-│   ├── tenant.py       # Tenant models
-│   └── usage.py        # Usage metrics models
-├── tests/              # Tests
-│   └── test_client.py  # Test client
-└── requirements.txt    # Dependencies
+┌─────────────────────────────────────────────────────┐
+│                   Nginx (Port 443)                  │
+│  • SSL Termination                                  │
+│  • CORS Headers                                     │
+│  • Request Routing                                  │
+│  • WebSocket Upgrade                                │
+└────────────────────┬───────────────────────────────┘
+                     │
+┌────────────────────▼───────────────────────────────┐
+│               FastAPI (Port 8000)                   │
+│  • Business Logic                                   │
+│  • Authentication/Authorization                     │
+│  • DynamoDB Operations                             │
+│  • NATS Pub/Sub                                   │
+└────────────────────────────────────────────────────┘
 ```
-
-## API Endpoints
-
-### Agents
-
-- `GET /api/v1/agents` - List all agents
-- `POST /api/v1/agents` - Register a new agent
-- `GET /api/v1/agents/{agent_id}` - Get agent details
-- `PUT /api/v1/agents/{agent_id}/status` - Update agent status
-
-### SSH Keys
-
-- `GET /api/v1/ssh-keys` - List all SSH keys
-- `POST /api/v1/ssh-keys` - Add a new SSH key
-- `DELETE /api/v1/ssh-keys/{key_id}` - Delete SSH key
-
-### Channels
-
-- `GET /api/v1/channels` - List all channels
-- `POST /api/v1/channels` - Create a new channel
-- `GET /api/v1/channels/{channel_id}` - Get channel details
-
-### Usage and Billing
-
-- `GET /api/v1/usage-metrics` - Get usage metrics
-- `GET /api/v1/billing` - Get billing information
-
-## Setup and Installation
-
-### Prerequisites
-
-- Python 3.9+
-- NATS Server
-- AWS Account (for deployment)
-
-### Local Development
-
-1. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-2. Start a local NATS server:
-
-```bash
-# Using Docker
-docker run -p 4222:4222 nats
-```
-
-3. Run the FastAPI application:
-
-```bash
-cd artcafe_pubsub
-python -m api.app
-```
-
-4. Access the API documentation at http://localhost:8000/docs
-
-### Testing
-
-Run the test client:
-
-```bash
-python -m tests.test_client
-```
-
-### Deployment to AWS
-
-1. Make sure you have AWS CLI installed and configured with appropriate credentials.
-
-2. Create or import an EC2 key pair in the AWS Console. This will be used for SSH access to the EC2 instances.
-
-3. Run the deployment script with the key pair name:
-
-```bash
-cd infrastructure
-chmod +x deploy.sh
-./deploy.sh --env dev --key-name YOUR_KEY_PAIR_NAME
-```
-
-This command:
-- Packages the application code into a zip file
-- Creates the CloudFormation stack with necessary AWS resources
-- Uploads the application code to the EC2 instance
-- Configures and starts the service
-
-Optional parameters:
-- `--region REGION_NAME` - AWS region to deploy to (default: us-east-1)
-- `--stack-name STACK_NAME` - CloudFormation stack name (default: artcafe-pubsub)
-- `--code-package PACKAGE_NAME` - Name of the zip file containing the application code (default: lambda.zip)
-- `--nats-instance-type INSTANCE_TYPE` - EC2 instance type for NATS server (default: t3.small)
-- `--api-instance-type INSTANCE_TYPE` - EC2 instance type for API server (default: t3.small)
-- `--skip-package` - Skip packaging and uploading application code (useful for infrastructure-only updates)
-
-4. After deployment completes, the script will output the URL of the deployed service.
 
 ## Authentication
 
-The service uses JWT tokens for authentication. Pass the token in the `Authorization` header as a Bearer token:
+### Human Users (Dashboard/API)
+- **Method**: AWS Cognito JWT tokens
+- **Endpoints**: All REST API endpoints, Dashboard WebSocket
+- **Header**: `Authorization: Bearer <jwt_token>`
+
+### Agents (Machines)
+- **Method**: SSH key challenge-response
+- **Endpoint**: Agent WebSocket only
+- **Connection**: `wss://ws.artcafe.ai/api/v1/ws/agent/{agent_id}?challenge=X&signature=Y&tenant_id=Z`
+- **No JWT tokens required** - connection itself is the authenticated session
+
+## Key Endpoints
+
+### REST API
+- `GET /health` - Health check
+- `GET/POST/PUT/DELETE /api/v1/agents` - Agent management
+- `GET/POST/PUT/DELETE /api/v1/channels` - Channel management
+- `GET /api/v1/tenants` - Tenant operations
+- `GET /api/v1/usage-metrics` - Usage statistics
+- `POST /api/v1/agents/auth/challenge` - Agent challenge (legacy)
+- `POST /api/v1/agents/auth/verify` - Agent verify (legacy)
+
+### WebSocket
+- `/api/v1/ws/dashboard` - Dashboard real-time events (JWT auth)
+- `/api/v1/ws/agent/{agent_id}` - Agent messaging (SSH key auth)
+
+## Directory Structure
 
 ```
-Authorization: Bearer <your_token>
+artcafe-pubsub/
+├── api/
+│   ├── app.py                 # FastAPI application
+│   ├── middleware.py          # Request logging, error handling
+│   ├── router.py             # Route registration
+│   ├── lambda_handler.py     # AWS Lambda adapter
+│   ├── db/
+│   │   └── dynamodb.py       # DynamoDB operations
+│   ├── routes/
+│   │   ├── agent_routes.py           # Agent CRUD
+│   │   ├── agent_websocket_routes.py # Agent WebSocket (simplified auth)
+│   │   ├── auth_routes.py            # Authentication endpoints
+│   │   ├── channel_routes.py         # Channel management
+│   │   ├── dashboard_websocket_routes.py # Dashboard WebSocket
+│   │   ├── tenant_routes.py          # Tenant operations
+│   │   └── usage_routes.py           # Usage metrics
+│   └── services/
+│       ├── agent_service.py          # Agent business logic
+│       ├── channel_service.py        # Channel business logic
+│       ├── tenant_service.py         # Tenant management
+│       └── usage_service.py          # Usage tracking
+├── auth/
+│   ├── jwt_auth.py           # JWT validation (Cognito)
+│   ├── ssh_auth_agent.py     # SSH key authentication
+│   └── dependencies.py       # Auth dependencies
+├── config/
+│   ├── settings.py           # Configuration management
+│   └── legal_versions.py     # Legal document versions
+├── core/
+│   ├── nats_client.py        # NATS connection management
+│   └── messaging_service.py  # Message routing
+├── models/
+│   ├── agent.py              # Agent data model
+│   ├── channel.py            # Channel data model
+│   ├── tenant.py             # Tenant data model
+│   └── usage.py              # Usage metrics model
+├── infrastructure/
+│   ├── dynamodb_service.py   # DynamoDB helper
+│   ├── challenge_store.py    # Challenge management
+│   └── metrics_service.py    # Metrics collection
+├── nats_client/
+│   ├── connection.py         # NATS connection
+│   └── subjects.py           # NATS subject definitions
+├── docs/                     # API documentation
+├── tests/                    # Test suite
+├── requirements.txt          # Python dependencies
+└── README_UPDATED.md         # This file
 ```
 
-The tenant ID can be specified in the `x-tenant-id` header.
+## Deployment
 
-## Multi-tenancy
+### Production Environment
+- **Server**: Ubuntu 24.04 on AWS EC2
+- **IP**: 3.229.1.223
+- **Service**: systemd service (artcafe-pubsub.service)
+- **Python**: 3.12 with virtual environment
 
-All resources are scoped to a tenant ID, which must be provided in the `x-tenant-id` header or in the JWT token payload.
+### Service Management
+```bash
+# Check status
+sudo systemctl status artcafe-pubsub
 
-## Contributing
+# View logs
+sudo journalctl -u artcafe-pubsub -f
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -am 'Add new feature'`
-4. Push to the branch: `git push origin feature/my-feature`
-5. Submit a pull request
+# Restart service
+sudo systemctl restart artcafe-pubsub
+```
 
-## License
+### Configuration
+Environment variables in `/etc/systemd/system/artcafe-pubsub.service`:
+- `JWT_SECRET_KEY` - JWT signing key
+- `AWS_REGION` - AWS region (us-east-1)
+- `NATS_URL` - NATS server URL (nats://localhost:4222)
 
-This project is licensed under the MIT License.
+## Development
+
+### Local Setup
+```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run locally
+uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Testing
+```bash
+# Run tests
+python -m pytest tests/
+
+# Test specific endpoints
+curl http://localhost:8000/health
+```
+
+## Monitoring
+
+### Key Metrics
+- WebSocket connections (agent vs dashboard)
+- Message throughput
+- API request latency
+- Authentication success/failure rates
+
+### Health Checks
+- `/health` - Overall service health
+- NATS connection status
+- DynamoDB availability
+
+## Security
+
+### CORS Policy
+Handled exclusively by Nginx:
+- Allowed origins: www.artcafe.ai, artcafe.ai, localhost:3000
+- Credentials: enabled
+- Methods: GET, POST, PUT, DELETE, OPTIONS, PATCH
+
+### Rate Limiting
+Currently handled at Nginx level (future enhancement)
+
+### Multi-tenancy
+All operations are scoped to tenant ID from:
+- JWT claims (human users)
+- Query parameters (agents)
+
+## Troubleshooting
+
+### Common Issues
+
+1. **CORS Errors**
+   - Check Nginx configuration
+   - Verify origin is in allowed list
+   - Ensure FastAPI is NOT adding CORS headers
+
+2. **WebSocket Connection Failed**
+   - Check authentication (JWT for dashboard, SSH key for agents)
+   - Verify WebSocket upgrade headers in Nginx
+   - Check service logs for specific errors
+
+3. **DynamoDB Errors**
+   - Verify IAM roles and permissions
+   - Check table existence
+   - Monitor throttling metrics
+
+### Useful Commands
+```bash
+# Check Nginx config
+sudo nginx -t
+
+# View Nginx logs
+sudo tail -f /var/log/nginx/access.log
+sudo tail -f /var/log/nginx/error.log
+
+# Test WebSocket connection
+wscat -c "wss://ws.artcafe.ai/api/v1/ws/dashboard?auth=<base64_auth>"
+
+# Check NATS
+nats-cli sub ">"  # Subscribe to all messages
+```
+
+## Recent Changes (May 26, 2025)
+
+1. **Removed API Gateway** - Direct Nginx routing
+2. **Simplified Agent Auth** - No JWT tokens for agents
+3. **CORS in Nginx Only** - Removed from FastAPI
+4. **Unified Configuration** - Single Nginx config for both domains
+5. **Cleaned Up** - Removed outdated scripts and fixes
+
+## Future Enhancements
+
+1. **Rate Limiting** - Implement per-tenant limits
+2. **Caching** - Add Redis for frequently accessed data
+3. **Monitoring** - Integrate Prometheus/Grafana
+4. **Load Balancing** - Multiple backend instances
+5. **Message Persistence** - Store critical messages

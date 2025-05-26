@@ -16,7 +16,7 @@ import base64
 import uuid
 import socket
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional, Callable, Awaitable, Union
 
 import jwt
@@ -60,7 +60,8 @@ class ArtCafeAgent:
         agent_id: str,
         tenant_id: str,
         private_key_path: str,
-        api_endpoint: str = "https://api.artcafe.ai",
+        api_endpoint: str = "https://api.artcafe.ai/prod/api/v1",
+        ws_endpoint: str = "wss://ws.artcafe.ai",
         log_level: str = "INFO",
         heartbeat_interval: int = 30
     ):
@@ -71,7 +72,8 @@ class ArtCafeAgent:
             agent_id: Agent ID
             tenant_id: Tenant ID
             private_key_path: Path to the SSH private key file
-            api_endpoint: API endpoint URL
+            api_endpoint: API endpoint URL (default: https://api.artcafe.ai/prod/api/v1)
+            ws_endpoint: WebSocket endpoint URL (default: wss://ws.artcafe.ai)
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
             heartbeat_interval: Seconds between heartbeats
         """
@@ -79,6 +81,7 @@ class ArtCafeAgent:
         self.tenant_id = tenant_id
         self.private_key_path = private_key_path
         self.api_endpoint = api_endpoint
+        self.ws_endpoint = ws_endpoint
         self.heartbeat_interval = heartbeat_interval
         
         # Setup logging
@@ -101,7 +104,7 @@ class ArtCafeAgent:
         
         # WebSocket
         self.ws = None
-        self.ws_url = f"{self.api_endpoint.replace('http', 'ws')}/ws/agent/{self.agent_id}"
+        self.ws_url = f"{self.ws_endpoint}/api/v1/ws/agent/{self.agent_id}"
         
         # State
         self.running = False
@@ -173,8 +176,8 @@ class ArtCafeAgent:
             # Get challenge
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.api_endpoint}/auth/challenge",
-                    json={"agent_id": self.agent_id}
+                    f"{self.api_endpoint}/auth/agent/challenge",
+                    json={"agent_id": self.agent_id, "tenant_id": self.tenant_id}
                 )
                 
                 if response.status_code != 200:
@@ -190,26 +193,18 @@ class ArtCafeAgent:
                 signature = self._sign_challenge(challenge)
                 signature_b64 = base64.b64encode(signature).decode()
                 
-                # Get key_id from previous auth if available
-                key_id = self.key_id
+                # For agents, the key_id is the agent_id itself
+                # since we store public keys directly in agent records
+                key_id = self.agent_id
                 
-                if not key_id:
-                    # Try to fetch agent info to get associated keys
-                    key_id = await self._get_agent_key_id()
-                
-                if not key_id:
-                    self.logger.error("No key ID available for authentication")
-                    return False
-                
-                # Verify signature
+                # Verify signature using agent-specific endpoint
                 response = await client.post(
-                    f"{self.api_endpoint}/auth/verify",
+                    f"{self.api_endpoint}/auth/agent/verify",
                     json={
                         "tenant_id": self.tenant_id,
-                        "key_id": key_id,
+                        "agent_id": self.agent_id,
                         "challenge": challenge,
-                        "response": signature_b64,
-                        "agent_id": self.agent_id
+                        "response": signature_b64
                     }
                 )
                 
@@ -350,12 +345,16 @@ class ArtCafeAgent:
             
             self.logger.info(f"Connecting to WebSocket: {self.ws_url}")
             
+            # Create headers for WebSocket connection
+            headers = {
+                "Authorization": f"Bearer {self.jwt_token}",
+                "x-tenant-id": self.tenant_id
+            }
+            
+            # Connect with extra_headers
             self.ws = await websockets.connect(
                 self.ws_url,
-                extra_headers={
-                    "Authorization": f"Bearer {self.jwt_token}",
-                    "x-tenant-id": self.tenant_id
-                }
+                extra_headers=headers
             )
             
             self.logger.info("Connected to WebSocket")
@@ -430,7 +429,7 @@ class ArtCafeAgent:
                     "type": "status",
                     "id": str(uuid.uuid4()),
                     "data": status_data,
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
                 await self.ws.send(json.dumps(status_msg))
                 

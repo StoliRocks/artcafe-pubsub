@@ -17,6 +17,7 @@ from fastapi.routing import APIRouter
 
 from api.services.agent_service import agent_service
 from api.services.tenant_service import tenant_service
+from api.services.usage_service import usage_service
 from auth.ssh_auth import SSHKeyManager
 from auth.jwt_handler import decode_token
 from nats_client import nats_manager
@@ -124,6 +125,7 @@ class ConnectionManager:
         try:
             data = json.loads(msg.data.decode())
             websocket = self.agents[agent_id]["ws"]
+            tenant_id = self.agents[agent_id]["tenant_id"]
             
             await websocket.send_json({
                 "type": "message",
@@ -131,6 +133,12 @@ class ConnectionManager:
                 "data": data,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
+            
+            # Track message usage for inbound messages
+            try:
+                await usage_service.increment_messages(tenant_id)
+            except Exception as e:
+                logger.error(f"Failed to track message usage: {e}")
         except Exception as e:
             logger.error(f"Error routing message to agent {agent_id}: {e}")
     
@@ -171,6 +179,7 @@ class ConnectionManager:
         try:
             data = json.loads(msg.data.decode())
             websocket = self.dashboards[user_id]["ws"]
+            tenant_id = self.dashboards[user_id]["tenant_id"]
             
             await websocket.send_json({
                 "type": "message",
@@ -178,6 +187,12 @@ class ConnectionManager:
                 "payload": data,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
+            
+            # Track message usage for dashboard messages
+            try:
+                await usage_service.increment_messages(tenant_id)
+            except Exception as e:
+                logger.error(f"Failed to track message usage: {e}")
         except Exception as e:
             logger.error(f"Error routing message to dashboard {user_id}: {e}")
     
@@ -278,6 +293,12 @@ async def agent_websocket(
                         
                         # Publish to NATS
                         await nats_manager.publish(subject, json.dumps(data).encode())
+                        
+                        # Track message usage
+                        try:
+                            await usage_service.increment_messages(tenant_id)
+                        except Exception as e:
+                            logger.error(f"Failed to track message usage: {e}")
                         
                         # Also broadcast to dashboards if it's a channel message
                         if subject.startswith(f"channels.{tenant_id}."):
