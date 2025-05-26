@@ -10,7 +10,8 @@ from .auth_routes import router as auth_router
 from .legal_routes import router as legal_router
 from .billing_routes import router as billing_router
 from .subscription_routes import router as subscription_router
-from .websocket_routes import router as websocket_router
+# from .websocket_routes import router as websocket_router
+from .agent_websocket import router as agent_websocket_router
 from .dashboard_websocket_routes import router as dashboard_websocket_router
 
 # Create main router
@@ -29,7 +30,7 @@ router.include_router(billing_router)
 router.include_router(subscription_router)
 
 # Include WebSocket routers
-router.include_router(websocket_router)
+router.include_router(agent_websocket_router)
 router.include_router(dashboard_websocket_router)
 
 __all__ = ["router"]
