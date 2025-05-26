@@ -37,10 +37,12 @@ class ConnectionManager:
     def __init__(self):
         # Agent connections: {agent_id: {"ws": WebSocket, "subs": [], "tenant_id": str}}
         self.agents: Dict[str, Dict[str, Any]] = {}
-        # Dashboard connections: {user_id: {"ws": WebSocket, "tenant_id": str}}
+        # Dashboard connections: {user_id: {"ws": WebSocket, "tenant_id": str, "subs": []}}
         self.dashboards: Dict[str, Dict[str, Any]] = {}
         # NATS subscription tracking: {subject: set(agent_ids)}
         self.subject_subscribers: Dict[str, Set[str]] = {}
+        # Dashboard subscription tracking: {subject: set(user_ids)}
+        self.dashboard_subscribers: Dict[str, Set[str]] = {}
     
     async def connect_agent(self, agent_id: str, tenant_id: str, websocket: WebSocket):
         """Register an agent connection."""
@@ -72,13 +74,25 @@ class ConnectionManager:
         """Register a dashboard connection."""
         self.dashboards[user_id] = {
             "ws": websocket,
-            "tenant_id": tenant_id
+            "tenant_id": tenant_id,
+            "subs": []
         }
         logger.info(f"Dashboard user {user_id} connected")
     
     async def disconnect_dashboard(self, user_id: str):
-        """Remove a dashboard connection."""
+        """Remove a dashboard connection and clean up subscriptions."""
         if user_id in self.dashboards:
+            # Unsubscribe from all NATS subjects
+            for sub in self.dashboards[user_id]["subs"]:
+                try:
+                    await sub.unsubscribe()
+                except:
+                    pass
+            
+            # Remove from subject tracking
+            for subject, subscribers in self.dashboard_subscribers.items():
+                subscribers.discard(user_id)
+            
             del self.dashboards[user_id]
             logger.info(f"Dashboard user {user_id} disconnected")
     
@@ -119,6 +133,53 @@ class ConnectionManager:
             })
         except Exception as e:
             logger.error(f"Error routing message to agent {agent_id}: {e}")
+    
+    async def subscribe_dashboard(self, user_id: str, topic: str):
+        """Subscribe a dashboard to a topic (typically a channel)."""
+        if user_id not in self.dashboards:
+            return
+        
+        dashboard_info = self.dashboards[user_id]
+        tenant_id = dashboard_info["tenant_id"]
+        
+        # Ensure topic is properly scoped to tenant
+        # Accept both old format (tenant.{tenant_id}.channel.) and new format (channels.{tenant_id}.)
+        if not (topic.startswith(f"tenant.{tenant_id}.channel.") or topic.startswith(f"channels.{tenant_id}.")):
+            logger.warning(f"Dashboard {user_id} tried to subscribe to unauthorized topic: {topic}")
+            return
+        
+        # Track subscription
+        if topic not in self.dashboard_subscribers:
+            self.dashboard_subscribers[topic] = set()
+        self.dashboard_subscribers[topic].add(user_id)
+        
+        # Create NATS handler
+        async def handler(msg):
+            await self.route_to_dashboard(user_id, topic, msg)
+        
+        # Subscribe to NATS
+        sub = await nats_manager.subscribe(topic, cb=handler)
+        self.dashboards[user_id]["subs"].append(sub)
+        
+        logger.info(f"Dashboard user {user_id} subscribed to {topic}")
+    
+    async def route_to_dashboard(self, user_id: str, topic: str, msg):
+        """Route a NATS message to a dashboard via WebSocket."""
+        if user_id not in self.dashboards:
+            return
+        
+        try:
+            data = json.loads(msg.data.decode())
+            websocket = self.dashboards[user_id]["ws"]
+            
+            await websocket.send_json({
+                "type": "message",
+                "topic": topic,
+                "payload": data,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception as e:
+            logger.error(f"Error routing message to dashboard {user_id}: {e}")
     
     async def broadcast_to_dashboards(self, tenant_id: str, message: dict):
         """Send a message to all dashboards for a tenant."""
@@ -293,12 +354,51 @@ async def dashboard_websocket(
             "tenant_id": tenant_id
         })
         
+        # Ensure NATS is connected
+        if not nats_manager.is_connected:
+            await nats_manager.connect()
+        
         # Keep connection alive
         while True:
             try:
-                # We mainly push data to dashboards, but handle pings
+                # Handle dashboard messages
                 message = await websocket.receive_json()
-                if message.get("type") == "ping":
+                msg_type = message.get("type")
+                
+                if msg_type == "subscribe":
+                    topic = message.get("topic")
+                    if topic:
+                        await manager.subscribe_dashboard(user_id, topic)
+                        await websocket.send_json({
+                            "type": "subscribed",
+                            "topic": topic
+                        })
+                
+                elif msg_type == "unsubscribe":
+                    topic = message.get("topic")
+                    if topic and topic in manager.dashboard_subscribers:
+                        # Remove user from topic subscribers
+                        if user_id in manager.dashboard_subscribers[topic]:
+                            manager.dashboard_subscribers[topic].discard(user_id)
+                        
+                        # Unsubscribe from NATS if no more subscribers
+                        if not manager.dashboard_subscribers[topic]:
+                            # Find and remove the subscription
+                            for i, sub in enumerate(manager.dashboards[user_id]["subs"]):
+                                # This is a simple approach - in production you'd track topic->sub mapping
+                                try:
+                                    await sub.unsubscribe()
+                                    manager.dashboards[user_id]["subs"].pop(i)
+                                    break
+                                except:
+                                    pass
+                        
+                        await websocket.send_json({
+                            "type": "unsubscribed",
+                            "topic": topic
+                        })
+                
+                elif msg_type == "ping":
                     await websocket.send_json({
                         "type": "pong",
                         "timestamp": datetime.now(timezone.utc).isoformat()
