@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Request
 from typing import List, Optional, Dict
 
-from models import TenantCreate, TenantResponse, Tenant
+from models import TenantCreate, TenantResponse, Tenant, TenantUpdate
 from models.user_tenant import UserWithTenants, UserRole
 from api.services import tenant_service
 from api.services.user_tenant_service import user_tenant_service
@@ -124,7 +124,7 @@ async def get_tenant(
 @router.put("/{tenant_id}", response_model=Tenant)
 async def update_tenant(
     tenant_id: str,
-    update_data: dict,
+    update_data: TenantUpdate,
     user: UserWithTenants = Depends(get_current_user_with_tenants),
     verified_tenant_id: str = Depends(verify_tenant_access)
 ):
@@ -152,12 +152,21 @@ async def update_tenant(
                 detail="Only admins can update tenant settings"
             )
         
+        # Convert update_data to dict, excluding None values
+        update_dict = update_data.dict(exclude_none=True)
+        
+        if not update_dict:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update"
+            )
+        
         # Update tenant
         from ..db import dynamodb
         await dynamodb.update_item(
             table_name=settings.TENANT_TABLE_NAME,
             key={"id": tenant_id},
-            updates=update_data
+            updates=update_dict
         )
         
         # Get updated tenant

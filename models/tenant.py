@@ -27,6 +27,13 @@ class TenantBase(BaseModel):
     name: str
     admin_email: EmailStr
     subscription_tier: str = SubscriptionTier.BASIC
+    
+    # Branding and organization info
+    description: Optional[str] = None
+    website: Optional[str] = None
+    logo_url: Optional[str] = None
+    primary_color: Optional[str] = "#0284c7"  # Ocean-600
+    secondary_color: Optional[str] = "#0ea5e9"  # Ocean-500
 
     @validator('subscription_tier')
     def validate_tier(cls, v):
@@ -94,6 +101,28 @@ class Tenant(TenantBase, BaseSchema):
 
     class Config:
         allow_population_by_field_name = True
+
+
+class TenantUpdate(BaseModel):
+    """Tenant update model"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    website: Optional[str] = None
+    logo_url: Optional[str] = None
+    primary_color: Optional[str] = None
+    secondary_color: Optional[str] = None
+    admin_email: Optional[EmailStr] = None
+    subscription_tier: Optional[str] = None
+    
+    @validator('subscription_tier')
+    def validate_tier(cls, v):
+        """Validate subscription tier if provided"""
+        if v is not None:
+            allowed_tiers = [SubscriptionTier.FREE, SubscriptionTier.BASIC,
+                             SubscriptionTier.PRO, SubscriptionTier.ENTERPRISE]
+            if v not in allowed_tiers:
+                raise ValueError(f"Subscription tier must be one of: {', '.join(allowed_tiers)}")
+        return v
 
 
 class TenantResponse(BaseModel):

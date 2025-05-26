@@ -8,7 +8,7 @@ from .channel import (
     Channel, ChannelCreate, ChannelResponse, ChannelsResponse
 )
 from .tenant import (
-    Tenant, TenantCreate, TenantResponse
+    Tenant, TenantCreate, TenantUpdate, TenantResponse
 )
 from .usage_metrics import (
     UsageMetrics, UsageMetricsResponse, DailyUsage, UsageTotal, UsageLimits
@@ -31,7 +31,7 @@ __all__ = [
     "Agent", "AgentCreate", "AgentUpdate", "AgentResponse", "AgentCreateResponse", "AgentsResponse", "AgentMetadata",
     "SSHKey", "SSHKeyCreate", "SSHKeyResponse", "SSHKeysResponse",
     "Channel", "ChannelCreate", "ChannelResponse", "ChannelsResponse",
-    "Tenant", "TenantCreate", "TenantResponse",
+    "Tenant", "TenantCreate", "TenantUpdate", "TenantResponse",
     "UsageMetrics", "UsageMetricsResponse", "DailyUsage", "UsageTotal", "UsageLimits",
     "ChannelSubscription", "ChannelSubscriptionCreate", "ChannelSubscriptionUpdate",
     "ChannelSubscriptionResponse", "ChannelSubscriptionsResponse", "SubscriptionRole",
