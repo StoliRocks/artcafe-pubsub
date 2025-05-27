@@ -15,6 +15,7 @@ from .usage_routes import router as usage_router
 from .auth_routes import router as auth_router
 from .legal_routes import router as legal_router
 from .billing_routes import router as billing_router
+from .profile_routes import router as profile_router
 
 # Import WebSocket routers from the new consolidated module
 from ..websocket import agent_router as agent_websocket_router
@@ -32,6 +33,7 @@ router.include_router(usage_router)
 router.include_router(auth_router)
 router.include_router(legal_router)
 router.include_router(billing_router)
+router.include_router(profile_router)
 
 # Include WebSocket routers (they already have /api/v1 prefix)
 agent_websocket_router.prefix = ""  # Remove prefix since it's already in the route

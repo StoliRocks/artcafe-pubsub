@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Simple deployment script for profile updates
+
+INSTANCE_ID="i-0cd295d6b239ca775"
+
+echo "Deploying profile updates to EC2..."
+
+# Deploy via SSM
+aws ssm send-command \
+    --instance-ids $INSTANCE_ID \
+    --document-name "AWS-RunShellScript" \
+    --parameters 'commands=[
+        "cd /opt/artcafe/artcafe-pubsub",
+        "echo \"Creating profile routes file...\"",
+        "sudo tee api/routes/profile_routes.py > /dev/null <<'\''EOF'\''",
+        "from fastapi import APIRouter, HTTPException, status, Depends\nfrom typing import Dict, Optional\nfrom pydantic import BaseModel, EmailStr\n\nfrom auth.dependencies import get_current_user\nfrom api.services.user_tenant_service import user_tenant_service\nfrom api.services.tenant_service import tenant_service\n\nrouter = APIRouter(prefix=\"/profile\", tags=[\"profile\"])\n\n\nclass UserProfileResponse(BaseModel):\n    \"\"\"User profile response\"\"\"\n    profile: Dict\n    organizations: list[Dict] = []\n    current_organization: Optional[Dict] = None\n\n\n@router.get(\"/me\", response_model=UserProfileResponse)\nasync def get_current_user_profile(\n    user: Dict = Depends(get_current_user)\n):\n    \"\"\"Get current user profile\"\"\"\n    try:\n        # Get user profile from JWT\n        user_id = user.get(\"user_id\", user.get(\"sub\"))\n        user_profile = {\n            \"user_id\": user_id,\n            \"email\": user.get(\"email\", \"\"),\n            \"name\": user.get(\"name\", \"\"),\n            \"greeting\": user.get(\"nickname\", \"\"),\n            \"avatar_url\": user.get(\"picture\", \"\"),\n            \"timezone\": user.get(\"zoneinfo\", \"UTC\"),\n            \"notifications_enabled\": True\n        }\n        \n        # Get user organizations\n        user_tenants = await tenant_service.get_user_tenants(user_id)\n        \n        # Format organizations\n        organizations = []\n        for tenant in user_tenants:\n            org_data = {\n                \"id\": tenant.id,\n                \"name\": tenant.name,\n                \"role\": \"admin\",\n                \"created_at\": tenant.created_at,\n                \"subscription_tier\": tenant.subscription_tier,\n                \"logo_url\": getattr(tenant, \"logo_url\", None),\n                \"primary_color\": getattr(tenant, \"primary_color\", \"#0284c7\")\n            }\n            organizations.append(org_data)\n        \n        # Get current organization\n        current_org = organizations[0] if organizations else None\n        \n        return UserProfileResponse(\n            profile=user_profile,\n            organizations=organizations,\n            current_organization=current_org\n        )\n        \n    except Exception as e:\n        raise HTTPException(\n            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,\n            detail=f\"Error fetching user profile: {str(e)}\"\n        )\n\n\n@router.put(\"/me\")\nasync def update_current_user_profile(\n    profile_data: Dict,\n    user: Dict = Depends(get_current_user)\n):\n    \"\"\"Update current user profile\"\"\"\n    try:\n        # For now, just return success\n        # In future, save to DynamoDB\n        return {\"success\": True, \"message\": \"Profile updated\"}\n        \n    except Exception as e:\n        raise HTTPException(\n            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,\n            detail=f\"Error updating user profile: {str(e)}\"\n        )\n\n\n@router.get(\"/preferences\")\nasync def get_user_preferences(\n    user: Dict = Depends(get_current_user)\n):\n    \"\"\"Get user preferences\"\"\"\n    try:\n        # Return default preferences\n        return {\n            \"theme\": \"light\",\n            \"language\": \"en\",\n            \"email_notifications\": {\n                \"agent_status\": True,\n                \"usage_alerts\": True,\n                \"billing_updates\": True,\n                \"security_alerts\": True,\n                \"newsletter\": False\n            },\n            \"dashboard_layout\": \"grid\",\n            \"default_view\": \"overview\",\n            \"timezone\": user.get(\"zoneinfo\", \"UTC\"),\n            \"date_format\": \"MM/DD/YYYY\",\n            \"time_format\": \"12h\"\n        }\n        \n    except Exception as e:\n        raise HTTPException(\n            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,\n            detail=f\"Error fetching preferences: {str(e)}\"\n        )\n\n\n@router.put(\"/preferences\")\nasync def update_user_preferences(\n    preferences: Dict,\n    user: Dict = Depends(get_current_user)\n):\n    \"\"\"Update user preferences\"\"\"\n    try:\n        # For now, just return the preferences\n        return preferences\n        \n    except Exception as e:\n        raise HTTPException(\n            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,\n            detail=f\"Error updating preferences: {str(e)}\"\n        )\nEOF",
+        "echo \"Updating routes __init__.py...\"",
+        "sudo sed -i '\''s/from .billing_routes import router as billing_router/from .billing_routes import router as billing_router\\nfrom .profile_routes import router as profile_router/'\'' api/routes/__init__.py",
+        "sudo sed -i '\''s/router.include_router(billing_router)/router.include_router(billing_router)\\nrouter.include_router(profile_router)/'\'' api/routes/__init__.py",
+        "echo \"Restarting service...\"",
+        "sudo systemctl restart artcafe-pubsub",
+        "sleep 5",
+        "sudo systemctl status artcafe-pubsub | head -10"
+    ]' \
+    --output text
+
+echo "Deployment command sent. Check EC2 instance for status."
