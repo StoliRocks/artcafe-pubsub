@@ -5,7 +5,7 @@ from datetime import datetime, date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Path, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from .routes import websocket_routes, subscription_routes, dashboard_websocket_routes, billing_routes, tenant_routes, agent_websocket_routes, billing_subscription_routes
+from .routes import websocket_routes, subscription_routes, dashboard_websocket_routes, billing_routes, tenant_routes, agent_websocket_routes, billing_subscription_routes, profile_routes
 
 from artcafe_pubsub.models.agent import (
     Agent, AgentStatus, AgentType, AgentCreate, AgentUpdate, 
@@ -55,6 +55,9 @@ router.include_router(agent_websocket_routes.router, prefix="/api/v1")
 
 # Include Billing Subscription routes
 router.include_router(billing_subscription_routes.router, prefix="/api/v1")
+
+# Include Profile routes
+router.include_router(profile_routes.router, prefix="/api/v1")
 
 # Create JWT authentication service
 jwt_auth = JWTAuth(
