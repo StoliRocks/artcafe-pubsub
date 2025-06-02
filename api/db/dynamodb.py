@@ -219,23 +219,24 @@ class DynamoDBService:
             for attr_name, attr_value in updates.items():
                 update_expressions.append(f"#{attr_name} = :{attr_name}")
                 expression_attribute_names[f"#{attr_name}"] = attr_name
-                # Fix boolean values before setting
-                fixed_value = self._fix_booleans_for_dynamodb(attr_value)
-                expression_attribute_values[f":{attr_name}"] = fixed_value
+                
+                # Convert value to DynamoDB format
+                if isinstance(attr_value, str):
+                    expression_attribute_values[f":{attr_name}"] = {"S": attr_value}
+                elif isinstance(attr_value, (int, float)):
+                    expression_attribute_values[f":{attr_name}"] = {"N": str(attr_value)}
+                elif isinstance(attr_value, bool):
+                    expression_attribute_values[f":{attr_name}"] = {"BOOL": attr_value}
+                elif attr_value is None:
+                    expression_attribute_values[f":{attr_name}"] = {"NULL": True}
+                else:
+                    # Use the existing conversion method for complex types
+                    temp_key = f"temp_{attr_name}"
+                    converted = self._convert_to_dynamodb_item({temp_key: attr_value})
+                    expression_attribute_values[f":{attr_name}"] = converted[temp_key]
                 
             # Create update expression
             update_expression = "SET " + ", ".join(update_expressions)
-            
-            # Convert to DynamoDB format
-            dynamo_values = self._convert_to_dynamodb_item(
-                {k[1:]: v for k, v in expression_attribute_values.items()}
-            )
-            expression_attribute_values = {
-                k: list(v.values())[0] for k, v in zip(
-                    expression_attribute_values.keys(), 
-                    dynamo_values.values()
-                )
-            }
             
             # Perform update
             response = self.client.update_item(

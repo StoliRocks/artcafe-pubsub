@@ -1,0 +1,96 @@
+{
+  "TableName": "artcafe-websocket-connections",
+  "KeySchema": [
+    {
+      "AttributeName": "pk",
+      "KeyType": "HASH"
+    },
+    {
+      "AttributeName": "sk",
+      "KeyType": "RANGE"
+    }
+  ],
+  "AttributeDefinitions": [
+    {
+      "AttributeName": "pk",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "sk",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "server_id",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "tenant_id",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "connection_type",
+      "AttributeType": "S"
+    }
+  ],
+  "GlobalSecondaryIndexes": [
+    {
+      "IndexName": "ServerIndex",
+      "KeySchema": [
+        {
+          "AttributeName": "server_id",
+          "KeyType": "HASH"
+        },
+        {
+          "AttributeName": "pk",
+          "KeyType": "RANGE"
+        }
+      ],
+      "Projection": {
+        "ProjectionType": "ALL"
+      },
+      "ProvisionedThroughput": {
+        "ReadCapacityUnits": 5,
+        "WriteCapacityUnits": 5
+      }
+    },
+    {
+      "IndexName": "TenantIndex",
+      "KeySchema": [
+        {
+          "AttributeName": "tenant_id",
+          "KeyType": "HASH"
+        },
+        {
+          "AttributeName": "connection_type",
+          "KeyType": "RANGE"
+        }
+      ],
+      "Projection": {
+        "ProjectionType": "ALL"
+      },
+      "ProvisionedThroughput": {
+        "ReadCapacityUnits": 5,
+        "WriteCapacityUnits": 5
+      }
+    }
+  ],
+  "BillingMode": "PROVISIONED",
+  "ProvisionedThroughput": {
+    "ReadCapacityUnits": 10,
+    "WriteCapacityUnits": 10
+  },
+  "StreamSpecification": {
+    "StreamEnabled": true,
+    "StreamViewType": "NEW_AND_OLD_IMAGES"
+  },
+  "Tags": [
+    {
+      "Key": "Environment",
+      "Value": "production"
+    },
+    {
+      "Key": "Application",
+      "Value": "artcafe-pubsub"
+    }
+  ]
+}

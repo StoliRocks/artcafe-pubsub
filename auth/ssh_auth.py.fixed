@@ -117,7 +117,7 @@ class SSHKeyManager:
                 signature,
                 message,
                 padding.PKCS1v15(),
-                None
+                hashes.SHA256()  # Specify the hash algorithm
             )
             
             return True
@@ -285,14 +285,9 @@ class SSHKeyManager:
             # Verify the signature
             message = challenge.encode('utf-8')
             
-            # Calculate the SHA256 hash of the message for RSA-SHA256 signature verification
-            digest = hashes.Hash(hashes.SHA256())
-            digest.update(message)
-            digest_bytes = digest.finalize()
-            
             valid = self.verify_signature(
                 ssh_key.public_key,
-                digest_bytes,  # Use the digest instead of the raw message
+                message,  # Pass the raw message, not the digest
                 base64.b64decode(response)
             )
 

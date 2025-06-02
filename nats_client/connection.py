@@ -118,6 +118,11 @@ class NatsConnectionManager:
             cb=callback,
             queue=queue
         )
+    
+    @property
+    def is_connected(self) -> bool:
+        """Check if connected to NATS"""
+        return self._client is not None and self._client.is_connected
         
     # Callback handlers
     async def _reconnected_cb(self) -> None:

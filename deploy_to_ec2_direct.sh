@@ -2,7 +2,7 @@
 
 # Direct deployment to EC2 instance using AWS Systems Manager
 
-INSTANCE_ID="i-02eb87cad85b30cf0"  # Your EC2 instance ID
+INSTANCE_ID="i-0cd295d6b239ca775"  # Your EC2 instance ID
 REGION="us-east-1"
 
 echo "Deploying updated CORS configuration to EC2..."

@@ -107,30 +107,15 @@ async def validate_tenant(
                 detail=f"Tenant is not active. Current status: {tenant.status}"
             )
         
-        # Check payment status
-        if tenant.payment_status == "expired":
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Subscription has expired"
-            )
-        
+        # Check payment status - only check if completely inactive
         if tenant.payment_status == "inactive":
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Subscription is inactive"
             )
         
-        # Check if trial or subscription has expired
-        now = datetime.utcnow()
-        if tenant.subscription_expires_at and tenant.subscription_expires_at < now:
-            # Update tenant payment status to expired
-            # This should be done in a background task to avoid blocking the request
-            # await tenant_service.update_payment_status(tenant_id, "expired")
-            
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Subscription has expired"
-            )
+        # For free plan, we enforce limits instead of expiration
+        # Limit checking is handled separately in check_tenant_limits
         
         logger.debug(f"Tenant validation successful: {tenant.id}")
         return tenant

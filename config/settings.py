@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
     
+    # AWS WebSocket API Settings
+    AWS_WEBSOCKET_API_ID: str = Field(default="cxxx228bta", env="AWS_WEBSOCKET_API_ID")
+    AWS_WEBSOCKET_STAGE: str = Field(default="production", env="AWS_WEBSOCKET_STAGE")
+    
     # DynamoDB Settings
     DYNAMODB_ENDPOINT: Optional[str] = None
     DYNAMODB_TABLE_PREFIX: str = Field(default="artcafe-")

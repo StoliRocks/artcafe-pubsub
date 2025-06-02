@@ -10,6 +10,7 @@ from .routes import router
 from .middleware import setup_middleware
 from .db import dynamodb
 from nats_client import nats_manager
+from .websocket import agent_router, dashboard_router
 
 # Configure logging
 logging.basicConfig(
@@ -49,8 +50,13 @@ setup_middleware(app)
 # Include API routes
 app.include_router(router)
 
+# Include WebSocket routes with API prefix
+app.include_router(agent_router, prefix="/api/v1")
+app.include_router(dashboard_router, prefix="/api/v1")
+
 # Add a simple test WebSocket for debugging
 from fastapi import WebSocket
+from fastapi.websockets import WebSocketState
 
 @app.websocket("/ws-test")
 async def test_websocket(websocket: WebSocket):
@@ -141,6 +147,14 @@ async def startup_event():
         logger.error(f"Failed to initialize challenge store: {e}")
     
     # Heartbeat checking is now handled internally by the websocket module
+    
+    # Start channel bridge service (for AWS WebSocket integration)
+    try:
+        from .services.channel_bridge_service import channel_bridge
+        await channel_bridge.start()
+        logger.info("Channel bridge service started")
+    except Exception as e:
+        logger.error(f"Failed to start channel bridge service: {e}")
 
     logger.info("ArtCafe.ai PubSub API started")
 
@@ -157,6 +171,14 @@ async def shutdown_event():
         logger.info("Metrics service stopped")
     except Exception as e:
         logger.error(f"Failed to stop metrics service: {e}")
+    
+    # Stop channel bridge service
+    try:
+        from .services.channel_bridge_service import channel_bridge
+        await channel_bridge.stop()
+        logger.info("Channel bridge service stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop channel bridge service: {e}")
 
     # Close NATS connection
     await nats_manager.close()

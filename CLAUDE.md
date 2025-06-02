@@ -197,4 +197,30 @@ See `/docs/dynamodb_tables.md` for detailed documentation.
 2. **Boolean Values**: Fixed DynamoDB boolean handling
 3. **User-Tenant**: Fixed query issues
 
-Last updated: May 18, 2025
+## Session Notes - June 1, 2025
+
+### Critical Fixes Applied
+1. **Subscription System** - Removed trial logic, implemented free plan limits (3 agents, 10 channels, 10k messages)
+2. **DynamoDB Update Format** - Fixed ExpressionAttributeValues to use type descriptors like `{"S": "value"}`
+3. **SSH Signature Verification** - Fixed to use hashes.SHA256() instead of None
+4. **WebSocket NATS Check** - Removed `nats_manager.is_connected` check as quick fix
+5. **nginx WebSocket Routing** - Fixed port 8001 → 8000
+
+### WebSocket URLs
+- Agent: `wss://ws.artcafe.ai/ws/agent/{agent_id}`
+- Dashboard: `wss://ws.artcafe.ai/ws/dashboard`
+- AWS WebSocket API: `wss://cxxx228bta.execute-api.us-east-1.amazonaws.com/production`
+
+### AWS Resources Created
+- Lambda: `artcafe-websocket-handler`
+- DynamoDB: `artcafe-websocket-connections`
+- IAM Role: `ArtCafe_Cognito_Auth_Role`
+- Identity Pool: `us-east-1:96bd8108-4a2d-446d-a01b-424263388049`
+
+### Channel Bridge Service Added - June 1, 2025
+- Created `channel_bridge_service.py` to bridge NATS to AWS WebSocket API
+- Added `is_connected` property to NATS connection manager
+- Lambda handler enhanced with broadcast functionality
+- Supports real-time channel monitoring in frontend
+
+Last updated: June 1, 2025

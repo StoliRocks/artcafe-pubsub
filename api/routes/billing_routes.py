@@ -60,8 +60,8 @@ async def get_billing_info(
                 "price_yearly": plan.price_yearly,
                 "description": plan.description
             },
-            "billing_cycle": "monthly",
-            "next_billing_date": tenant.subscription_expires_at.isoformat() if tenant.subscription_expires_at else None,
+            "billing_cycle": "monthly" if plan.price_monthly > 0 else "free",
+            "next_billing_date": None,  # Free plans don't have billing dates
             "amount": plan.price_monthly,
             "currency": "USD",
             "payment_method": "credit_card" if tenant.stripe_customer_id else None,

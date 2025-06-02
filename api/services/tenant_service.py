@@ -79,14 +79,14 @@ class TenantService:
             tenant_dict["api_key"] = api_key
 
             # Add payment and subscription information
-            trial_days = tenant_dict.pop("trial_days", 14)
-            tenant_dict["payment_status"] = PaymentStatus.TRIAL
-            tenant_dict["subscription_expires_at"] = (datetime.utcnow() + timedelta(days=trial_days)).isoformat()
+            tenant_dict["payment_status"] = PaymentStatus.ACTIVE  # Default to active for all new tenants
+            tenant_dict["subscription_expires_at"] = None  # No expiration for free plans
             tenant_dict["created_at"] = datetime.utcnow().isoformat()
             tenant_dict["last_payment_date"] = None
 
             # Set usage limits based on subscription tier
             tier = tenant_dict.get("subscription_tier", "free")  # Default to free tier
+            tenant_dict["subscription_plan"] = tier  # Set the plan explicitly
             
             # Get subscription plan details
             plan = SUBSCRIPTION_PLANS.get(tier)
@@ -287,18 +287,10 @@ class TenantService:
             # Update payment information
             update_data = {"payment_status": payment_status}
 
-            # Set subscription expiry based on payment status
-            if payment_status == PaymentStatus.ACTIVE:
-                # Set expiry to 30 days from now for active subscriptions
-                update_data["subscription_expires_at"] = (datetime.utcnow() + timedelta(days=30)).isoformat()
+            # Only update payment date for paid plans
+            if payment_status == PaymentStatus.ACTIVE and payment_reference:
                 update_data["last_payment_date"] = datetime.utcnow().isoformat()
-
-                if payment_reference:
-                    update_data["payment_reference"] = payment_reference
-
-            elif payment_status == PaymentStatus.TRIAL:
-                # Set trial expiry to 14 days from now
-                update_data["subscription_expires_at"] = (datetime.utcnow() + timedelta(days=14)).isoformat()
+                update_data["payment_reference"] = payment_reference
 
             # Update in DynamoDB
             await dynamodb.update_item(
@@ -354,35 +346,15 @@ class TenantService:
 
     async def check_expired_subscriptions(self) -> int:
         """
-        Check for expired subscriptions and update their status
+        Legacy method - no longer needed as free plans don't expire
+        Kept for backward compatibility
 
         Returns:
-            Number of expired subscriptions found and updated
+            Always returns 0
         """
-        try:
-            now = datetime.utcnow()
-
-            # Get active and trial tenants
-            active_tenants = await self.list_tenants()
-            expired_count = 0
-
-            # Check each tenant for expiry
-            for tenant in active_tenants:
-                if (tenant.payment_status in [PaymentStatus.ACTIVE, PaymentStatus.TRIAL] and
-                    tenant.subscription_expires_at and
-                    tenant.subscription_expires_at < now):
-
-                    # Update to expired status
-                    await self.update_payment_status(tenant.tenant_id, PaymentStatus.EXPIRED)
-                    expired_count += 1
-
-                    # TODO: Send notification email
-
-            return expired_count
-
-        except Exception as e:
-            logger.error(f"Error checking expired subscriptions: {e}")
-            raise
+        # Free plans don't expire - they have usage limits instead
+        # This method is kept for backward compatibility but does nothing
+        return 0
     
     async def get_user_tenants(self, user_id: str) -> List[Tenant]:
         """

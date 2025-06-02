@@ -52,7 +52,8 @@ class ConnectionManager:
             "subs": [],
             "tenant_id": tenant_id
         }
-        logger.info(f"Agent {agent_id} connected")
+        logger.info(f"Agent {agent_id} connected from tenant {tenant_id}")
+        logger.info(f"Total connected agents: {len(self.agents)}")
     
     async def disconnect_agent(self, agent_id: str):
         """Remove an agent connection and clean up subscriptions."""
@@ -78,7 +79,8 @@ class ConnectionManager:
             "tenant_id": tenant_id,
             "subs": []
         }
-        logger.info(f"Dashboard user {user_id} connected")
+        logger.info(f"Dashboard user {user_id} connected from tenant {tenant_id}")
+        logger.info(f"Total connected dashboards: {len(self.dashboards)}")
     
     async def disconnect_dashboard(self, user_id: str):
         """Remove a dashboard connection and clean up subscriptions."""
@@ -151,8 +153,14 @@ class ConnectionManager:
         tenant_id = dashboard_info["tenant_id"]
         
         # Ensure topic is properly scoped to tenant
-        # Accept both old format (tenant.{tenant_id}.channel.) and new format (channels.{tenant_id}.)
-        if not (topic.startswith(f"tenant.{tenant_id}.channel.") or topic.startswith(f"channels.{tenant_id}.")):
+        # Accept channel topics and agent broadcast topics
+        allowed_topics = [
+            f"tenant.{tenant_id}.channel.",  # Channel topics
+            f"channels.{tenant_id}.",  # Legacy channel format
+            f"agents.{tenant_id}.broadcast"  # Agent broadcast topic
+        ]
+        
+        if not any(topic.startswith(prefix) for prefix in allowed_topics):
             logger.warning(f"Dashboard {user_id} tried to subscribe to unauthorized topic: {topic}")
             return
         
@@ -170,10 +178,14 @@ class ConnectionManager:
         self.dashboards[user_id]["subs"].append(sub)
         
         logger.info(f"Dashboard user {user_id} subscribed to {topic}")
+        logger.info(f"Total topic subscribers: {len(self.dashboard_subscribers[topic])}")
     
     async def route_to_dashboard(self, user_id: str, topic: str, msg):
         """Route a NATS message to a dashboard via WebSocket."""
+        logger.info(f"Routing NATS message to dashboard {user_id} for topic {topic}")
+        
         if user_id not in self.dashboards:
+            logger.warning(f"Dashboard {user_id} no longer connected")
             return
         
         try:
@@ -181,12 +193,16 @@ class ConnectionManager:
             websocket = self.dashboards[user_id]["ws"]
             tenant_id = self.dashboards[user_id]["tenant_id"]
             
-            await websocket.send_json({
+            message_to_send = {
                 "type": "message",
                 "topic": topic,
                 "payload": data,
                 "timestamp": datetime.now(timezone.utc).isoformat()
-            })
+            }
+            
+            logger.info(f"Sending message to dashboard WebSocket: {message_to_send}")
+            await websocket.send_json(message_to_send)
+            logger.info(f"Successfully sent message to dashboard {user_id}")
             
             # Track message usage for dashboard messages
             try:
@@ -194,7 +210,7 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Failed to track message usage: {e}")
         except Exception as e:
-            logger.error(f"Error routing message to dashboard {user_id}: {e}")
+            logger.error(f"Error routing message to dashboard {user_id}: {e}", exc_info=True)
     
     async def broadcast_to_dashboards(self, tenant_id: str, message: dict):
         """Send a message to all dashboards for a tenant."""
@@ -209,7 +225,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-@agent_router.websocket("/api/v1/ws/agent/{agent_id}")
+@agent_router.websocket("/ws/agent/{agent_id}")
 async def agent_websocket(
     websocket: WebSocket,
     agent_id: str,
@@ -268,10 +284,13 @@ async def agent_websocket(
                 if msg_type == "subscribe":
                     subject = message.get("subject")
                     if subject:
-                        # Add tenant prefix for security (unless it's a global subject)
-                        if not subject.startswith("agents.presence."):
-                            if not subject.startswith(f"agents.{tenant_id}."):
-                                subject = f"agents.{tenant_id}.{subject}"
+                        # Don't modify channel topics - they already have proper format
+                        if subject.startswith(f"tenant.{tenant_id}.channel."):
+                            # Channel subscription - use as-is
+                            pass
+                        # Add tenant prefix for agent topics only
+                        elif not subject.startswith("agents.presence.") and not subject.startswith(f"agents.{tenant_id}."):
+                            subject = f"agents.{tenant_id}.{subject}"
                         
                         await manager.subscribe_agent(agent_id, subject)
                         
@@ -291,8 +310,12 @@ async def agent_websocket(
                         if "timestamp" not in data:
                             data["timestamp"] = datetime.now(timezone.utc).isoformat()
                         
-                        # Publish to NATS
-                        await nats_manager.publish(subject, json.dumps(data).encode())
+                        # Log the publish
+                        logger.info(f"Agent {agent_id} publishing to {subject}")
+                        
+                        # Publish to NATS - nats_manager expects a dict, not bytes
+                        await nats_manager.publish(subject, data)
+                        logger.info(f"Published to NATS: {subject}")
                         
                         # Track message usage
                         try:
@@ -300,13 +323,8 @@ async def agent_websocket(
                         except Exception as e:
                             logger.error(f"Failed to track message usage: {e}")
                         
-                        # Also broadcast to dashboards if it's a channel message
-                        if subject.startswith(f"channels.{tenant_id}."):
-                            await manager.broadcast_to_dashboards(tenant_id, {
-                                "type": "channel_message",
-                                "subject": subject,
-                                "data": data
-                            })
+                        # REMOVED: Direct broadcast to dashboards
+                        # Dashboard subscribers should receive messages via NATS like any other subscriber
                 
                 elif msg_type == "ping":
                     await websocket.send_json({
@@ -329,7 +347,7 @@ async def agent_websocket(
             pass
 
 
-@dashboard_router.websocket("/api/v1/ws/dashboard")
+@dashboard_router.websocket("/ws/dashboard")
 async def dashboard_websocket(
     websocket: WebSocket,
     token: str = Query(...)
@@ -417,6 +435,44 @@ async def dashboard_websocket(
                         await websocket.send_json({
                             "type": "unsubscribed",
                             "topic": topic
+                        })
+                
+                elif msg_type == "subscribe_channel":
+                    # Subscribe to a specific channel for monitoring
+                    channel_id = message.get("channel_id")
+                    msg_tenant_id = message.get("tenant_id")
+                    
+                    if channel_id and msg_tenant_id == tenant_id:
+                        # Subscribe to the channel topic
+                        channel_topic = f"tenant.{tenant_id}.channel.{channel_id}"
+                        
+                        async def channel_handler(msg):
+                            try:
+                                data = json.loads(msg.data.decode())
+                                await websocket.send_json({
+                                    "type": "channel_message",
+                                    "channel_id": channel_id,
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    "from": data.get("from", "Unknown"),
+                                    "content": data.get("content", data),
+                                    "agent_id": data.get("agent_id"),
+                                    "message": data.get("message"),
+                                    "payload": data.get("payload")
+                                })
+                            except Exception as e:
+                                logger.error(f"Error handling channel message: {e}")
+                        
+                        # Subscribe to NATS
+                        sub = await nats_manager.subscribe(channel_topic, callback=channel_handler)
+                        
+                        # Store subscription
+                        if "channel_subs" not in manager.dashboards[user_id]:
+                            manager.dashboards[user_id]["channel_subs"] = {}
+                        manager.dashboards[user_id]["channel_subs"][channel_id] = sub
+                        
+                        await websocket.send_json({
+                            "type": "subscription_confirmed",
+                            "channel_id": channel_id
                         })
                 
                 elif msg_type == "ping":

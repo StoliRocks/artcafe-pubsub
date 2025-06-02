@@ -327,8 +327,11 @@ class BillingService:
             # Get next invoice date
             tenant = await tenant_service.get_tenant(tenant_id)
             next_invoice_date = None
-            if tenant and tenant.subscription_expires_at:
-                next_invoice_date = tenant.subscription_expires_at
+            # Free plans don't have next invoice dates
+            if tenant and tenant.subscription_plan != "free":
+                # For paid plans, calculate next billing date (e.g., first of next month)
+                from dateutil.relativedelta import relativedelta
+                next_invoice_date = datetime.utcnow().replace(day=1) + relativedelta(months=1)
             
             return BillingHistory(
                 invoices=invoices,

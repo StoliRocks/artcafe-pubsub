@@ -16,10 +16,10 @@ class SubscriptionTier(str):
 
 class PaymentStatus(str):
     """Payment status enum"""
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    TRIAL = "trial"
-    EXPIRED = "expired"
+    ACTIVE = "active"  # Active subscription (free or paid)
+    INACTIVE = "inactive"  # Subscription cancelled or payment failed
+    TRIAL = "trial"  # Legacy - no longer used
+    EXPIRED = "expired"  # Legacy - no longer used
 
 
 class TenantBase(BaseModel):
@@ -48,7 +48,6 @@ class TenantBase(BaseModel):
 class TenantCreate(TenantBase):
     """Tenant creation model"""
     metadata: Optional[Dict] = None
-    trial_days: int = 14  # Default trial period in days
     # Terms acceptance data
     terms_acceptance: Optional[Dict] = None  # Include IP, timestamp, versions, etc.
 
@@ -60,8 +59,8 @@ class Tenant(TenantBase, BaseSchema):
     status: str = "active"
 
     # Payment fields
-    payment_status: str = PaymentStatus.TRIAL
-    subscription_expires_at: Optional[datetime] = None
+    payment_status: str = PaymentStatus.ACTIVE  # Default to active for free plans
+    subscription_expires_at: Optional[datetime] = None  # Deprecated - kept for backward compatibility
     last_payment_date: Optional[datetime] = None
     payment_reference: Optional[str] = None
 
@@ -77,6 +76,8 @@ class Tenant(TenantBase, BaseSchema):
     @validator('payment_status')
     def validate_payment_status(cls, v):
         """Validate payment status"""
+        # Only allow ACTIVE and INACTIVE for new tenants
+        # TRIAL and EXPIRED are legacy values kept for backward compatibility
         allowed_statuses = [PaymentStatus.ACTIVE, PaymentStatus.INACTIVE,
                            PaymentStatus.TRIAL, PaymentStatus.EXPIRED]
         if v not in allowed_statuses:
@@ -85,19 +86,10 @@ class Tenant(TenantBase, BaseSchema):
 
     @validator('subscription_expires_at', pre=True, always=True)
     def set_expiry_date(cls, v, values):
-        """Set subscription expiry date if not provided"""
-        if v:
-            return v
-
-        # If new tenant (no ID) or in trial, set expiry based on creation date
-        is_new = 'id' not in values or not values['id']
-        is_trial = 'payment_status' in values and values['payment_status'] == PaymentStatus.TRIAL
-
-        if is_new or is_trial:
-            # Default 14-day trial
-            return datetime.utcnow() + timedelta(days=14)
-
-        return datetime.utcnow() + timedelta(days=30)  # Default 30-day subscription
+        """Set subscription expiry date if not provided - deprecated field"""
+        # This field is deprecated but kept for backward compatibility
+        # Free plans don't expire, they just have usage limits
+        return v  # Return None for free plans
 
     class Config:
         allow_population_by_field_name = True
