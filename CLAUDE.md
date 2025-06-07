@@ -16,15 +16,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - **REST API**: `https://api.artcafe.ai` → Nginx → FastAPI
 - **WebSocket Endpoints**:
   - Dashboard: `wss://ws.artcafe.ai/ws/dashboard` (JWT auth)
-  - Agent: `wss://ws.artcafe.ai/ws/agent/{agent_id}` (SSH auth)
+  - Client: `wss://ws.artcafe.ai/ws/client/{client_id}` (NKey auth - coming soon)
+  - Agent (Legacy): `wss://ws.artcafe.ai/ws/agent/{agent_id}` (SSH auth - still supported)
 
 ### EC2 Instances
 - **API Server**: `i-0cd295d6b239ca775` (3.229.1.223) - `prod-server-1`
 - **NATS Server**: `i-089fc5ec51567037f` (3.239.238.118)
 
-## Recent Implementations (June 2025)
+## Recent Changes (June 7, 2025)
 
-### Topic Preview with NATS Forwarding (June 3)
+### NKey Authentication Migration
+- **IMPORTANT**: System is transitioning from SSH keys to NATS NKeys
+- **Terminology Changes**:
+  - Tenant remains as tenant (organization)
+  - Agent → Client (NKey-based)
+  - Channel → Subject (coming soon)
+- **Backend Updates**:
+  - Added NKey fields to tenant model
+  - New client model replaces agent model
+  - Client routes use tenant_id (not account_id)
+  - Account routes map to tenant service for compatibility
+
+### Previous Implementations (June 2025)
+
+#### Topic Preview with NATS Forwarding (June 3)
 - **Feature**: Real-time message monitoring for dashboard users
 - **Implementation**:
   - Dashboard WebSocket handlers: `subscribe_topic_preview`, `unsubscribe_topic_preview`
@@ -35,7 +50,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
   - `/api/websocket.py` - Topic preview handlers and NATS forwarding
   - `/api/services/local_message_tracker.py` - Message tracking service
 
-### Message Tracking with Redis/Valkey (June 3)
+#### Message Tracking with Redis/Valkey (June 3)
 - **Feature**: Real-time usage metrics for billing
 - **Implementation**:
   - Redis/Valkey stores message counts by tenant/agent/channel
@@ -47,7 +62,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
   - Added startup event to connect to Redis
   - JWT clock drift (added 30-second leeway)
 
-### Scalable WebSocket Management (June 1)
+#### Scalable WebSocket Management (June 1)
 - **DynamoDB Table**: `artcafe-websocket-connections`
   - Tracks all WebSocket connections across servers
   - TTL-enabled (24 hours) for automatic cleanup
@@ -64,54 +79,150 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - `/api/services/websocket_connection_service.py` - DynamoDB connection state
 - `/api/services/connection_heartbeat_service.py` - Agent health monitoring
 - `/api/services/local_message_tracker.py` - Redis/Valkey message tracking
-- `/api/services/agent_service.py` - Agent CRUD operations
+- `/api/services/agent_service.py` - Agent CRUD operations (legacy)
+- `/api/services/client_service.py` - Client CRUD operations (new)
 - `/api/services/tenant_service.py` - Multi-tenant management
 - `/api/services/channel_service.py` - Channel management
 
 ### Authentication
 - **JWT Auth**: Dashboard users via Cognito
-- **SSH Auth**: Agents use SSH key challenge/response
-- **No JWT for Agents**: Simplified auth flow
+- **NKey Auth**: Clients use Ed25519 keys (new)
+- **SSH Auth**: Agents use SSH key challenge/response (legacy)
 
 ## Database Schema (DynamoDB)
 
-### Core Tables
-- `artcafe-agents` - Agent configurations with SSH keys
-- `artcafe-websocket-connections` - Active WebSocket connections
-- `artcafe-tenants` - Organization data
-- `artcafe-channels` - Messaging channels
-- `artcafe-channel-subscriptions` - Agent-channel mappings
-- `artcafe-usage-metrics` - Usage tracking
-- `artcafe-Challenges` - Auth challenges (5-min TTL)
+### Active Tables (as of June 7, 2025)
+1. **artcafe-tenants** - Organizations (with NKey fields added)
+   - Primary key: `id` (tenant_id)
+   - Fields: name, admin_email, subscription info, nkey_public, issuer_key
+   
+2. **artcafe-clients** - AI clients with NKey auth
+   - Primary key: `client_id`
+   - Indexes: TenantIndex, NKeyIndex
+   - Fields: tenant_id, name, nkey_public, permissions, status
+   
+3. **artcafe-agents** - Legacy SSH-based agents
+   - Primary key: `id` (agent_id)
+   - Will be migrated to clients table
+   
+4. **artcafe-websocket-connections** - Active connections
+   - Primary key: `connection_id`
+   - TTL: 24 hours
+   - Indexes: ServerIndex, TenantIndex, AgentIdIndex
+   
+5. **artcafe-channels** - Pub/sub channels
+   - Primary key: `channel_id`
+   
+6. **artcafe-channel-subscriptions** - Agent-channel mappings
+   - Primary key: agent_id + channel_id
+   
+7. **artcafe-user-profiles** - User profile data
+   - Primary key: `user_id`
+   
+8. **artcafe-user-tenants** - User-organization mappings
+   - Primary key: `user_id`
+   
+9. **artcafe-usage-metrics** - Usage tracking
+   - Primary key: `id`
+   
+10. **artcafe-activity-logs** - Audit trail
+    - Primary key: `id`
+    
+11. **artcafe-Challenges** - SSH auth challenges
+    - Primary key: `challenge`
+    - TTL: 5 minutes
+    
+12. **artcafe-nkey-seeds** - Encrypted NKey storage
+    - Primary key: `seed_id`
+    
+13. **artcafe-subjects** - Future channel replacement
+    - Primary key: `subject_id`
+
+### Deleted Tables
+- **artcafe-accounts** - Deleted June 7 (was unused duplicate of tenants)
+- **artcafe-ssh-keys** - Deleted May 29 (keys now in agent records)
 
 ## Message Flow
 
 ```
-Agent → WebSocket → NATS → Other Agents
-         ↓           ↓
-      DynamoDB    Redis/Valkey
-    (connection)  (tracking)
-         ↓           ↓
-      Dashboard ← Usage API
+Client/Agent → WebSocket → NATS → Other Clients/Agents
+                ↓           ↓
+             DynamoDB    Redis/Valkey
+           (connection)  (tracking)
+                ↓           ↓
+             Dashboard ← Usage API
 ```
 
-## Deployment Commands
+## Deployment Instructions
+
+### Deploy Code Changes via SSM
 
 ```bash
-# Deploy via SSM
+# Basic deployment
 aws ssm send-command \
   --instance-ids i-0cd295d6b239ca775 \
   --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["cd /opt/artcafe/artcafe-pubsub", "sudo systemctl restart artcafe-pubsub"]'
+  --parameters 'commands=[
+    "cd /opt/artcafe/artcafe-pubsub",
+    "git pull",
+    "sudo systemctl restart artcafe-pubsub"
+  ]'
 
+# Deploy specific files (when not using git)
+# 1. Create tar file locally
+tar -czf deploy.tar.gz file1.py file2.py
+
+# 2. Upload to EC2
+scp -i ~/.ssh/agent-pubsub-key.pem deploy.tar.gz ubuntu@3.229.1.223:/tmp/
+
+# 3. Extract and restart
+aws ssm send-command \
+  --instance-ids i-0cd295d6b239ca775 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=[
+    "cd /opt/artcafe/artcafe-pubsub",
+    "sudo tar -xzf /tmp/deploy.tar.gz",
+    "sudo chown -R ubuntu:ubuntu .",
+    "sudo systemctl restart artcafe-pubsub"
+  ]'
+```
+
+### Check Service Status
+
+```bash
 # Check logs
-sudo journalctl -u artcafe-pubsub -f
+aws ssm send-command \
+  --instance-ids i-0cd295d6b239ca775 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["sudo journalctl -u artcafe-pubsub -n 100 --no-pager"]'
 
 # Test health
 curl https://api.artcafe.ai/health
 
-# Monitor connections
-aws dynamodb scan --table-name artcafe-websocket-connections --query "Count"
+# Check service status
+aws ssm send-command \
+  --instance-ids i-0cd295d6b239ca775 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["sudo systemctl status artcafe-pubsub"]'
+```
+
+### Monitor Resources
+
+```bash
+# WebSocket connections
+aws dynamodb scan --table-name artcafe-websocket-connections --select COUNT
+
+# Active agents
+aws dynamodb scan --table-name artcafe-agents \
+  --filter-expression "status = :status" \
+  --expression-attribute-values '{":status":{"S":"online"}}' \
+  --select COUNT
+
+# Redis stats
+aws ssm send-command \
+  --instance-ids i-0cd295d6b239ca775 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["redis-cli INFO stats"]'
 ```
 
 ## API Endpoints
@@ -120,10 +231,25 @@ aws dynamodb scan --table-name artcafe-websocket-connections --query "Count"
 - `GET /health` - Service health check
 
 ### Authentication
-- `POST /api/v1/auth/agent/challenge` - Get agent auth challenge
-- `POST /api/v1/auth/agent/verify` - Verify agent signature
+- `POST /api/v1/auth/agent/challenge` - Get agent auth challenge (legacy)
+- `POST /api/v1/auth/agent/verify` - Verify agent signature (legacy)
 
-### Agents
+### Accounts (Maps to Tenants)
+- `GET /api/v1/accounts` - List user's organizations
+- `GET /api/v1/accounts/{account_id}` - Get organization details
+- `POST /api/v1/accounts/generate-nkey/{account_id}` - Generate NKey for organization
+- `PUT /api/v1/accounts/{account_id}` - Update organization
+
+### Clients (NKey-based)
+- `GET /api/v1/clients` - List clients
+- `POST /api/v1/clients` - Create client (returns NKey seed once!)
+- `GET /api/v1/clients/{client_id}` - Get client details
+- `PUT /api/v1/clients/{client_id}` - Update client
+- `DELETE /api/v1/clients/{client_id}` - Delete client
+- `POST /api/v1/clients/{client_id}/regenerate-nkey` - Regenerate NKey
+- `GET /api/v1/clients/{client_id}/status` - Get connection status
+
+### Agents (Legacy SSH-based)
 - `GET /api/v1/agents` - List agents
 - `POST /api/v1/agents` - Create agent
 - `GET /api/v1/agents/{agent_id}` - Get agent details
@@ -138,18 +264,30 @@ aws dynamodb scan --table-name artcafe-websocket-connections --query "Count"
 ### Usage & Metrics
 - `GET /api/v1/usage/metrics` - Get real-time usage data
 - `GET /api/v1/usage/current` - Current billing period usage
+- `GET /api/v1/usage/local/stats` - Local Redis stats
+
+### Profile & Settings
+- `GET /api/v1/profile/me` - Get user profile
+- `PUT /api/v1/profile/me` - Update profile
+- `GET /api/v1/profile/preferences` - Get preferences
+- `PUT /api/v1/profile/preferences` - Update preferences
+
+### Activity Logs
+- `GET /api/v1/activity/logs` - Get activity logs
+- `GET /api/v1/activity/summary` - Get activity summary
 
 ### WebSocket
 - `WS /ws/agent/{agent_id}` - Agent connection (SSH auth)
+- `WS /ws/client/{client_id}` - Client connection (NKey auth - coming)
 - `WS /ws/dashboard` - Dashboard connection (JWT auth)
 
 ## WebSocket Message Types
 
-### Agent Messages
+### Agent/Client Messages
 - `heartbeat` - Keep connection alive
-- `publish` - Send message to channel
-- `subscribe` - Subscribe to channel
-- `unsubscribe` - Unsubscribe from channel
+- `publish` - Send message to channel/subject
+- `subscribe` - Subscribe to channel/subject
+- `unsubscribe` - Unsubscribe from channel/subject
 
 ### Dashboard Messages
 - `subscribe_channel` - Monitor specific channel
@@ -161,44 +299,35 @@ aws dynamodb scan --table-name artcafe-websocket-connections --query "Count"
 
 ### Environment Variables
 - `ARTCAFE_SERVER_ID` - Unique server identifier (e.g., "prod-server-1")
-- `NATS_URL` - NATS server URL
+- `NATS_URL` - NATS server URL (nats://10.0.2.120:4222)
 - `REDIS_URL` - Redis/Valkey URL for message tracking
-- `AWS_REGION` - AWS region for DynamoDB
+- `AWS_REGION` - AWS region for DynamoDB (us-east-1)
+
+### Service Configuration
+- **Location**: `/etc/systemd/system/artcafe-pubsub.service`
+- **User**: ubuntu
+- **Working Directory**: `/opt/artcafe/artcafe-pubsub`
+- **Port**: 8000
 
 ### CORS Configuration
 Handled entirely by Nginx - no CORS middleware in FastAPI.
 
-## Known Issues & TODOs
+## Common Issues & Solutions
 
-### Topic Preview Enhancements Needed
-1. Add rate limiting to prevent message flooding
-2. Implement message filtering by topic pattern
-3. Add support for granular subscription patterns
-4. Include message routing path metadata
-5. Add circuit breaker for overloaded clients
+### Import Errors
+- Always use absolute imports: `from models.tenant import Tenant`
+- Never use relative imports beyond current package
 
-### Message Tracking Enhancements
-1. Add hourly/daily rollup aggregations
-2. Implement data retention policies
-3. Add export capabilities for billing
+### DynamoDB Indexes
+- When changing key fields, must create new index first
+- Delete old indexes after migration
+- Pay-per-request mode doesn't need provisioned throughput
 
-## Testing
-
-### Monitor WebSocket Connections
-```python
-# See /test_websocket_tracking.py for connection monitoring
-# See /test_agent_status.py for agent status checks
-# See /test_heartbeat_agent.py for heartbeat example
-```
-
-### Channel Testing
-```bash
-# Publish test message
-curl -X POST https://api.artcafe.ai/api/v1/channels/{channel_id}/messages \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"content": "Test message"}'
-```
+### Service Won't Start
+1. Check for Python syntax errors
+2. Verify all imports resolve
+3. Check for missing dependencies (`pip list`)
+4. Review systemd logs: `sudo journalctl -u artcafe-pubsub -n 100`
 
 ## Architecture Decisions
 
@@ -221,6 +350,11 @@ curl -X POST https://api.artcafe.ai/api/v1/channels/{channel_id}/messages \
 - Fast message counting
 - Real-time usage tracking
 - Separate from persistent storage
+
+### Tenant-Based Architecture
+- "Tenant" is the core organizational unit
+- "Account" is just frontend-friendly terminology
+- All backend services use tenant_id consistently
 
 ## Data Persistence & Backup (June 4)
 
@@ -249,4 +383,17 @@ cp /var/lib/redis/dump.rdb /opt/artcafe/redis-backups/dump_$(date +%Y%m%d_%H%M%S
 ls -la /opt/artcafe/redis-backups/
 ```
 
-Last updated: June 4, 2025
+## Migration Notes
+
+### SSH to NKey Migration (In Progress)
+1. Agents table still uses SSH keys
+2. Clients table uses NKeys
+3. Both supported during transition
+4. Frontend shows "Clients" but backend has both endpoints
+
+### Future Changes
+1. Channels → Subjects migration pending
+2. Full NATS direct connection (remove WebSocket layer)
+3. Deprecate agent endpoints in favor of client endpoints
+
+Last updated: June 7, 2025
