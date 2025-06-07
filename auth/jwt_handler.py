@@ -142,7 +142,8 @@ def decode_token(token: str) -> Dict:
                 token,
                 public_key,
                 algorithms=['RS256'],
-                options={"verify_aud": False}  # Skip audience verification for now
+                options={"verify_aud": False},  # Skip audience verification for now
+                leeway=timedelta(seconds=30)  # Allow 30 seconds of clock drift
             )
             
         # Handle HS256 (internal) tokens
@@ -150,7 +151,8 @@ def decode_token(token: str) -> Dict:
             return jwt.decode(
                 token, 
                 settings.JWT_SECRET_KEY, 
-                algorithms=['HS256']
+                algorithms=['HS256'],
+                leeway=timedelta(seconds=30)  # Allow 30 seconds of clock drift
             )
         else:
             raise jwt.PyJWTError(f"Unsupported algorithm: {algorithm}")

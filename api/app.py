@@ -148,6 +148,31 @@ async def startup_event():
     
     # Heartbeat checking is now handled internally by the websocket module
     
+    # Initialize local message tracker (Valkey/Redis)
+    try:
+        from api.services.local_message_tracker import message_tracker
+        message_tracker.connect()
+        logger.info("Local message tracker initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize message tracker: {e}")
+    
+    # Start local backup service (Redis to disk backup)
+    try:
+        from api.services.local_backup_service import get_backup_service
+        backup_service = get_backup_service()
+        await backup_service.start()
+        logger.info("Local backup service started")
+    except Exception as e:
+        logger.error(f"Failed to start local backup service: {e}")
+        # Try S3 backup as fallback
+        try:
+            from api.services.s3_backup_service import get_s3_backup_service
+            s3_backup_service = get_s3_backup_service()
+            await s3_backup_service.start()
+            logger.info("S3 backup service started as fallback")
+        except Exception as e2:
+            logger.warning(f"S3 backup service also unavailable: {e2}")
+    
     # Start channel bridge service (for AWS WebSocket integration)
     try:
         from .services.channel_bridge_service import channel_bridge
@@ -163,6 +188,15 @@ async def startup_event():
 async def shutdown_event():
     """Execute on application shutdown"""
     logger.info("Shutting down ArtCafe.ai PubSub API...")
+    
+    # Stop S3 backup service
+    try:
+        from api.services.s3_backup_service import get_s3_backup_service
+        s3_backup_service = get_s3_backup_service()
+        await s3_backup_service.stop()
+        logger.info("S3 backup service stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop S3 backup service: {e}")
 
     # Stop metrics service
     try:

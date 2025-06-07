@@ -28,6 +28,10 @@ class TenantBase(BaseModel):
     admin_email: EmailStr
     subscription_tier: str = SubscriptionTier.BASIC
     
+    # NKey authentication fields
+    nkey_public: Optional[str] = None  # Public NKey for tenant authentication
+    issuer_key: Optional[str] = None  # For issuing JWT tokens to clients
+    
     # Branding and organization info
     description: Optional[str] = None
     website: Optional[str] = None

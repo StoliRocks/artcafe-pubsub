@@ -18,6 +18,8 @@ from fastapi.routing import APIRouter
 from api.services.agent_service import agent_service
 from api.services.tenant_service import tenant_service
 from api.services.usage_service import usage_service
+from api.services.local_message_tracker import message_tracker
+from api.services.user_tenant_service import user_tenant_service
 from auth.ssh_auth import SSHKeyManager
 from auth.jwt_handler import decode_token
 from nats_client import nats_manager
@@ -49,7 +51,6 @@ class ConnectionManager:
         """Register an agent connection."""
         self.agents[agent_id] = {
             "ws": websocket,
-            "subs": [],
             "tenant_id": tenant_id
         }
         logger.info(f"Agent {agent_id} connected from tenant {tenant_id}")
@@ -58,16 +59,27 @@ class ConnectionManager:
     async def disconnect_agent(self, agent_id: str):
         """Remove an agent connection and clean up subscriptions."""
         if agent_id in self.agents:
-            # Unsubscribe from all NATS subjects
-            for sub in self.agents[agent_id]["subs"]:
-                try:
-                    await sub.unsubscribe()
-                except:
-                    pass
-            
             # Remove from subject tracking
+            subjects_to_cleanup = []
             for subject, subscribers in self.subject_subscribers.items():
                 subscribers.discard(agent_id)
+                # If no more subscribers, mark for cleanup
+                if not subscribers:
+                    subjects_to_cleanup.append(subject)
+            
+            # Cleanup NATS subscriptions that have no more subscribers
+            if hasattr(self, 'nats_subscriptions'):
+                for subject in subjects_to_cleanup:
+                    if subject in self.nats_subscriptions:
+                        try:
+                            await self.nats_subscriptions[subject].unsubscribe()
+                            del self.nats_subscriptions[subject]
+                            logger.info(f"Unsubscribed from NATS subject: {subject}")
+                        except Exception as e:
+                            logger.error(f"Error unsubscribing from {subject}: {e}")
+                    # Remove empty subscriber set
+                    if subject in self.subject_subscribers:
+                        del self.subject_subscribers[subject]
             
             del self.agents[agent_id]
             logger.info(f"Agent {agent_id} disconnected")
@@ -107,17 +119,25 @@ class ConnectionManager:
         # Track subscription
         if subject not in self.subject_subscribers:
             self.subject_subscribers[subject] = set()
+            
+            # Create NATS handler that routes to ALL subscribers
+            async def handler(msg):
+                # Route to all agents subscribed to this subject
+                for subscriber_id in self.subject_subscribers.get(subject, set()).copy():
+                    if subscriber_id in self.agents:
+                        await self.route_to_agent(subscriber_id, subject, msg)
+            
+            # Create only ONE NATS subscription per subject
+            sub = await nats_manager.subscribe(subject, callback=handler)
+            # Store the subscription reference (we'll need to track this better)
+            if not hasattr(self, 'nats_subscriptions'):
+                self.nats_subscriptions = {}
+            self.nats_subscriptions[subject] = sub
+            
         self.subject_subscribers[subject].add(agent_id)
         
-        # Create NATS handler
-        async def handler(msg):
-            await self.route_to_agent(agent_id, subject, msg)
-        
-        # Subscribe to NATS
-        sub = await nats_manager.subscribe(subject, cb=handler)
-        self.agents[agent_id]["subs"].append(sub)
-        
         logger.info(f"Agent {agent_id} subscribed to {subject}")
+        logger.info(f"Total subscribers for {subject}: {len(self.subject_subscribers[subject])}")
     
     async def route_to_agent(self, agent_id: str, subject: str, msg):
         """Route a NATS message to an agent via WebSocket."""
@@ -141,6 +161,22 @@ class ConnectionManager:
                 await usage_service.increment_messages(tenant_id)
             except Exception as e:
                 logger.error(f"Failed to track message usage: {e}")
+            
+            # Track with Valkey/Redis for detailed metrics
+            try:
+                # Extract channel_id from subject if it's a channel message
+                channel_id = None
+                if subject.startswith(f"tenant.{tenant_id}.channel."):
+                    channel_id = subject.split(".")[-1]
+                
+                await message_tracker.track_message(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    channel_id=channel_id,
+                    message_size=len(json.dumps(data))
+                )
+            except Exception as e:
+                logger.debug(f"Message tracking error: {e}")
         except Exception as e:
             logger.error(f"Error routing message to agent {agent_id}: {e}")
     
@@ -174,7 +210,7 @@ class ConnectionManager:
             await self.route_to_dashboard(user_id, topic, msg)
         
         # Subscribe to NATS
-        sub = await nats_manager.subscribe(topic, cb=handler)
+        sub = await nats_manager.subscribe(topic, callback=handler)
         self.dashboards[user_id]["subs"].append(sub)
         
         logger.info(f"Dashboard user {user_id} subscribed to {topic}")
@@ -209,6 +245,22 @@ class ConnectionManager:
                 await usage_service.increment_messages(tenant_id)
             except Exception as e:
                 logger.error(f"Failed to track message usage: {e}")
+            
+            # Track with Valkey/Redis for detailed metrics
+            try:
+                # Extract channel_id from topic if it's a channel message
+                channel_id = None
+                if topic.startswith(f"tenant.{tenant_id}.channel."):
+                    channel_id = topic.split(".")[-1]
+                
+                await message_tracker.track_message(
+                    tenant_id=tenant_id,
+                    agent_id=None,  # Dashboard message, no specific agent
+                    channel_id=channel_id,
+                    message_size=len(json.dumps(data))
+                )
+            except Exception as e:
+                logger.debug(f"Message tracking error: {e}")
         except Exception as e:
             logger.error(f"Error routing message to dashboard {user_id}: {e}", exc_info=True)
     
@@ -265,15 +317,18 @@ async def agent_websocket(
         await websocket.accept()
         await manager.connect_agent(agent_id, tenant_id, websocket)
         
+        # Initialize message tracker on first use
+        if not hasattr(message_tracker, 'connected'):
+            message_tracker.connect()
+            message_tracker.connected = True
+        
         # Update agent status
         try:
             await agent_service.update_agent_status(tenant_id, agent_id, "online")
         except:
             pass
         
-        # Ensure NATS is connected
-        if not nats_manager.is_connected:
-            await nats_manager.connect()
+        # NATS connection is handled automatically by the connection manager
         
         # Handle messages
         while True:
@@ -323,6 +378,22 @@ async def agent_websocket(
                         except Exception as e:
                             logger.error(f"Failed to track message usage: {e}")
                         
+                        # Track with Valkey/Redis for detailed metrics
+                        try:
+                            # Extract channel_id from subject if it's a channel message
+                            channel_id = None
+                            if subject.startswith(f"tenant.{tenant_id}.channel."):
+                                channel_id = subject.split(".")[-1]
+                            
+                            await message_tracker.track_message(
+                                tenant_id=tenant_id,
+                                agent_id=agent_id,
+                                channel_id=channel_id,
+                                message_size=len(json.dumps(data))
+                            )
+                        except Exception as e:
+                            logger.debug(f"Message tracking error: {e}")
+                        
                         # REMOVED: Direct broadcast to dashboards
                         # Dashboard subscribers should receive messages via NATS like any other subscriber
                 
@@ -366,12 +437,22 @@ async def dashboard_websocket(
         try:
             payload = decode_token(token)
             user_id = payload.get("sub")
-            tenant_id = payload.get("tenant_id")
             
-            if not user_id or not tenant_id:
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+            if not user_id:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token - no user ID")
                 return
-                
+            
+            # Get user's tenants
+            user_tenants = await user_tenant_service.get_user_tenants(user_id)
+            if not user_tenants:
+                logger.error(f"No tenants found for user {user_id}")
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="No tenants found for user")
+                return
+            
+            # Use the first tenant (primary tenant)
+            # In the future, this could be enhanced to allow tenant selection
+            tenant_id = user_tenants[0].tenant_id
+            
             # Verify tenant exists
             tenant = await tenant_service.get_tenant(tenant_id)
             if not tenant:
@@ -479,6 +560,62 @@ async def dashboard_websocket(
                     await websocket.send_json({
                         "type": "pong",
                         "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                
+                elif msg_type == "subscribe_topic_preview":
+                    # Subscribe to all messages for this tenant for preview
+                    preview_topic = f"tenant.{tenant_id}.>"
+                    
+                    async def preview_handler(msg):
+                        try:
+                            # Parse the message data
+                            data = msg.data.decode() if isinstance(msg.data, bytes) else msg.data
+                            try:
+                                parsed_data = json.loads(data)
+                            except:
+                                parsed_data = {"raw": data}
+                            
+                            # Send preview message to dashboard
+                            await websocket.send_json({
+                                "type": "topic_preview_message",
+                                "subject": msg.subject,
+                                "topic": msg.subject,
+                                "data": parsed_data,
+                                "size": len(data),
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            })
+                        except Exception as e:
+                            logger.error(f"Error handling preview message: {e}")
+                    
+                    # Subscribe to NATS for all tenant messages
+                    if "preview_sub" in manager.dashboards.get(user_id, {}):
+                        # Unsubscribe from previous preview
+                        try:
+                            await manager.dashboards[user_id]["preview_sub"].unsubscribe()
+                        except:
+                            pass
+                    
+                    sub = await nats_manager.subscribe(preview_topic, callback=preview_handler)
+                    manager.dashboards[user_id]["preview_sub"] = sub
+                    
+                    await websocket.send_json({
+                        "type": "subscription_confirmed",
+                        "subscription": "topic_preview"
+                    })
+                    logger.info(f"Dashboard {user_id} subscribed to topic preview for tenant {tenant_id}")
+                
+                elif msg_type == "unsubscribe_topic_preview":
+                    # Unsubscribe from topic preview
+                    if "preview_sub" in manager.dashboards.get(user_id, {}):
+                        try:
+                            await manager.dashboards[user_id]["preview_sub"].unsubscribe()
+                            del manager.dashboards[user_id]["preview_sub"]
+                        except Exception as e:
+                            logger.error(f"Error unsubscribing from preview: {e}")
+                    
+                    await websocket.send_json({
+                        "type": "unsubscription_confirmed",
+                        "subscription": "topic_preview"
                     })
                     
             except WebSocketDisconnect:

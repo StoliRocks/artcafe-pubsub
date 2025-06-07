@@ -1,0 +1,159 @@
+{
+  "accounts": {
+    "TableName": "artcafe-accounts",
+    "KeySchema": [
+      {
+        "AttributeName": "account_id",
+        "KeyType": "HASH"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "account_id",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "nkey_public",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "NKeyIndex",
+        "Keys": [
+          {
+            "AttributeName": "nkey_public",
+            "KeyType": "HASH"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        },
+        "ProvisionedThroughput": {
+          "ReadCapacityUnits": 5,
+          "WriteCapacityUnits": 5
+        }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST"
+  },
+  
+  "clients": {
+    "TableName": "artcafe-clients",
+    "KeySchema": [
+      {
+        "AttributeName": "client_id",
+        "KeyType": "HASH"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "client_id",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "account_id",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "nkey_public",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "AccountIndex",
+        "Keys": [
+          {
+            "AttributeName": "account_id",
+            "KeyType": "HASH"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        },
+        "ProvisionedThroughput": {
+          "ReadCapacityUnits": 5,
+          "WriteCapacityUnits": 5
+        }
+      },
+      {
+        "IndexName": "NKeyIndex",
+        "Keys": [
+          {
+            "AttributeName": "nkey_public",
+            "KeyType": "HASH"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        },
+        "ProvisionedThroughput": {
+          "ReadCapacityUnits": 5,
+          "WriteCapacityUnits": 5
+        }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST"
+  },
+  
+  "subjects": {
+    "TableName": "artcafe-subjects",
+    "KeySchema": [
+      {
+        "AttributeName": "subject_id",
+        "KeyType": "HASH"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "subject_id",
+        "AttributeType": "S"
+      },
+      {
+        "AttributeName": "account_id",
+        "AttributeType": "S"
+      }
+    ],
+    "GlobalSecondaryIndexes": [
+      {
+        "IndexName": "AccountIndex",
+        "Keys": [
+          {
+            "AttributeName": "account_id",
+            "KeyType": "HASH"
+          }
+        ],
+        "Projection": {
+          "ProjectionType": "ALL"
+        },
+        "ProvisionedThroughput": {
+          "ReadCapacityUnits": 5,
+          "WriteCapacityUnits": 5
+        }
+      }
+    ],
+    "BillingMode": "PAY_PER_REQUEST"
+  },
+  
+  "nkey_seeds": {
+    "TableName": "artcafe-nkey-seeds",
+    "KeySchema": [
+      {
+        "AttributeName": "seed_id",
+        "KeyType": "HASH"
+      }
+    ],
+    "AttributeDefinitions": [
+      {
+        "AttributeName": "seed_id",
+        "AttributeType": "S"
+      }
+    ],
+    "TimeToLiveSpecification": {
+      "AttributeName": "ttl",
+      "Enabled": true
+    },
+    "BillingMode": "PAY_PER_REQUEST"
+  }
+}

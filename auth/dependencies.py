@@ -318,8 +318,5 @@ async def get_current_user_id(
     return user_data["user_id"]
 
 
-async def get_account_id(
-    tenant_id: str = Depends(get_current_tenant_id)
-) -> str:
-    """Get the current account ID (maps to tenant_id for backward compatibility)"""
-    return tenant_id
+# Backward compatibility alias
+get_account_id = get_current_tenant_id
