@@ -125,6 +125,7 @@ async def get_current_tenant_id(
     # Otherwise extract it from the JWT token
     try:
         payload = decode_token(credentials.credentials)
+        logger.debug(f"JWT payload: {payload}")
         
         # Check multiple possible locations for tenant ID
         tenant_id = (
@@ -137,6 +138,7 @@ async def get_current_tenant_id(
         if not tenant_id:
             # If no tenant ID in token, check if we can get it from user's default tenant
             user_id = payload.get("sub") or payload.get("user_id")
+            logger.debug(f"No tenant_id in token, looking up for user_id: {user_id}")
             if user_id:
                 # Try to get user's default tenant
                 # Lazy import to avoid circular dependency
@@ -307,3 +309,17 @@ async def get_tenant_from_websocket_token(websocket, token):
     except Exception as e:
         logger.error(f"Error extracting tenant from WebSocket token: {e}")
         return None, None
+
+
+async def get_current_user_id(
+    user_data: Dict = Depends(get_current_user)
+) -> str:
+    """Get the current user's ID"""
+    return user_data["user_id"]
+
+
+async def get_account_id(
+    tenant_id: str = Depends(get_current_tenant_id)
+) -> str:
+    """Get the current account ID (maps to tenant_id for backward compatibility)"""
+    return tenant_id
