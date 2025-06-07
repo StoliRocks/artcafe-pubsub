@@ -36,7 +36,7 @@ class UsageService:
         try:
             # Get agent counts
             agents = await dynamodb.query(
-                table_name=f"{settings.DYNAMODB_TABLE_PREFIX}Agents",
+                table_name=settings.AGENT_TABLE_NAME,
                 key_conditions={"tenant_id": tenant_id}
             )
             
@@ -58,7 +58,7 @@ class UsageService:
             
             # Get channel counts
             channels = await dynamodb.query(
-                table_name=f"{settings.DYNAMODB_TABLE_PREFIX}Channels",
+                table_name=settings.CHANNEL_TABLE_NAME,
                 key_conditions={"tenant_id": tenant_id}
             )
             
@@ -67,7 +67,7 @@ class UsageService:
             active_channels = sum(1 for channel in (channels or []) if channel.get('status') == 'active')
             
             # Get message count from usage stats
-            usage_table = f"{settings.DYNAMODB_TABLE_PREFIX}UsageMetrics"
+            usage_table = settings.USAGE_METRICS_TABLE_NAME
             today_key = f"{tenant_id}#daily#{date.today().isoformat()}"
             
             daily_stats = await dynamodb.get_item(

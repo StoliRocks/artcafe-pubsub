@@ -50,9 +50,10 @@ setup_middleware(app)
 # Include API routes
 app.include_router(router)
 
-# Include WebSocket routes with API prefix
-app.include_router(agent_router, prefix="/api/v1")
-app.include_router(dashboard_router, prefix="/api/v1")
+# Include WebSocket routes without API prefix for cleaner URLs
+# This makes WebSocket endpoints available at /ws/agent/{agent_id} and /ws/dashboard
+app.include_router(agent_router)
+app.include_router(dashboard_router)
 
 # Add a simple test WebSocket for debugging
 from fastapi import WebSocket
