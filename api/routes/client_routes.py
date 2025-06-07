@@ -12,9 +12,17 @@ from ulid import ULID
 from models.client import Client, ClientPermissions
 from auth.dependencies import get_current_user, get_current_tenant_id
 from api.services.client_service import ClientService
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 client_service = ClientService()
+
+
+class CreateClientRequest(BaseModel):
+    """Request body for creating a client"""
+    name: str
+    permissions: Optional[ClientPermissions] = None
+    metadata: Optional[dict] = None
 
 
 @router.get("/", response_model=List[Client])
@@ -50,9 +58,7 @@ async def get_client(
 
 @router.post("/", response_model=dict)
 async def create_client(
-    name: str,
-    permissions: Optional[ClientPermissions] = None,
-    metadata: Optional[dict] = None,
+    request: CreateClientRequest,
     tenant_id: str = Depends(get_current_tenant_id)
 ):
     """Create a new client with NKey"""
@@ -61,20 +67,25 @@ async def create_client(
     nkey_public = kp.public_key.decode('utf-8')
     nkey_seed = kp.seed.decode('utf-8')
     
+    # Generate unique client ID
+    client_ulid = str(ULID())
+    
     # Default permissions if not provided
-    if not permissions:
+    if not request.permissions:
         permissions = ClientPermissions(
-            publish=[f"{tenant_id}.clients.{str(ULID())}.evt"],
-            subscribe=[f"{tenant_id}.clients.{str(ULID())}.cmd", f"{tenant_id}._sys.*"]
+            publish=[f"{tenant_id}.*"],  # Can publish to any subject under tenant
+            subscribe=[f"{tenant_id}.>"]  # Can subscribe to all tenant subjects
         )
+    else:
+        permissions = request.permissions
     
     # Create client
     client = Client(
-        name=name,
+        name=request.name,
         tenant_id=tenant_id,
         nkey_public=nkey_public,
         permissions=permissions,
-        metadata=metadata or {}
+        metadata=request.metadata or {}
     )
     
     # Save to database
