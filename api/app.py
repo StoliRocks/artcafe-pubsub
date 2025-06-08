@@ -5,6 +5,9 @@ from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+# Apply nkeys monkey patch for missing functions
+import nkeys_fix
+
 from config.settings import settings
 from .routes import router
 from .middleware import setup_middleware

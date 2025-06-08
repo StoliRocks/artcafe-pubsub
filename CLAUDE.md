@@ -23,7 +23,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - **API Server**: `i-0cd295d6b239ca775` (3.229.1.223) - `prod-server-1`
 - **NATS Server**: `i-089fc5ec51567037f` (3.239.238.118)
 
-## Recent Changes (June 7, 2025)
+## Recent Changes (June 7-8, 2025)
+
+### NKey Implementation and Python Library Fix
+
+#### Problem Solved
+The Python `nkeys` library (v0.2.1) was missing the `create_user_seed()` and `create_account_seed()` functions that exist in other language implementations (Go, JavaScript, Rust). This prevented proper NKey generation for clients.
+
+#### Solution Implemented
+Created a production-ready monkey patch (`nkeys_fix.py`) that adds the missing functions using the library's existing `encode_seed()` function:
+
+```python
+def create_user_seed() -> bytes:
+    """Generate a new user NKey seed."""
+    random_bytes = secrets.token_bytes(32)
+    seed = nkeys.encode_seed(random_bytes, nkeys.PREFIX_BYTE_USER)
+    return seed
+```
+
+#### Key Files
+- `/nkeys_fix.py` - Monkey patch adding missing nkeys functions
+- `/api/app.py` - Imports nkeys_fix at startup
+- `/api/routes/client_routes.py` - Uses monkey-patched functions
+
+#### Implementation Details
+- Seeds follow NATS format: 58 characters, starting with 'SU' (user) or 'SA' (account)
+- Uses cryptographically secure random generation (`secrets.token_bytes`)
+- Properly validates seeds using `nkeys.from_seed()` before returning
+- Includes rate limiting (100 keys per hour per tenant)
 
 ### NKey Authentication Migration
 - **IMPORTANT**: System is transitioning from SSH keys to NATS NKeys
@@ -36,6 +63,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
   - New client model replaces agent model
   - Client routes use tenant_id (not account_id)
   - Account routes map to tenant service for compatibility
+  - Fixed datetime serialization in client routes (must use `.isoformat()`)
 
 ### Previous Implementations (June 2025)
 
@@ -396,4 +424,61 @@ ls -la /opt/artcafe/redis-backups/
 2. Full NATS direct connection (remove WebSocket layer)
 3. Deprecate agent endpoints in favor of client endpoints
 
-Last updated: June 7, 2025
+## NKey Testing & Verification
+
+### Testing Client Creation
+```bash
+# Create test script
+cat > test_client.py << 'EOF'
+import requests
+import json
+
+url = "https://api.artcafe.ai/api/v1/clients/"
+headers = {
+    "Authorization": "Bearer YOUR_JWT_TOKEN",
+    "Content-Type": "application/json"
+}
+
+data = {
+    "name": "Test Client",
+    "metadata": {
+        "description": "Testing NKey creation"
+    }
+}
+
+response = requests.post(url, json=data, headers=headers)
+print(f"Status: {response.status_code}")
+print(f"Response: {json.dumps(response.json(), indent=2)}")
+EOF
+
+python3 test_client.py
+```
+
+### Verifying NKey Format
+- Seeds: 58 characters starting with 'SU' (user) or 'SA' (account)
+- Public keys: Start with 'U' (user) or 'A' (account)
+- Example seed: `SUABNJPFBNZRAKTPYQQKAK2AQCB3YW7LIXUOQQX6KON7JRWCJHVBMOUASM`
+- Example public key: `UBU7KSEJNNAN5L65PXC6GPWN2VKMWLLJRZDM6HVZKNV63Y4AAXY73Y2A`
+
+### Common Deployment Commands
+```bash
+# Deploy single file using base64 encoding
+base64 -w0 myfile.py > myfile.b64
+aws ssm send-command --instance-ids i-0cd295d6b239ca775 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=[
+    "cd /opt/artcafe/artcafe-pubsub",
+    "echo '"$(cat myfile.b64)"' | base64 -d > /tmp/myfile.py",
+    "sudo mv /tmp/myfile.py path/to/destination.py",
+    "sudo chown ubuntu:ubuntu path/to/destination.py",
+    "sudo systemctl restart artcafe-pubsub"
+  ]' --query 'Command.CommandId' --output text
+
+# Check command result
+sleep 5 && aws ssm get-command-invocation \
+  --command-id COMMAND_ID \
+  --instance-id i-0cd295d6b239ca775 \
+  --query 'StandardOutputContent' --output text
+```
+
+Last updated: June 8, 2025
