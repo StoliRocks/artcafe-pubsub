@@ -12,6 +12,7 @@ from auth.tenant_auth import get_tenant_id, validate_tenant
 from models.usage import UsageMetricsResponse, UsageLimits
 from api.services.usage_service import usage_service
 from api.services.tenant_service import tenant_service
+from api.services.simple_wildcard_tracker import wildcard_tracker
 import logging
 
 logger = logging.getLogger(__name__)
@@ -233,4 +234,26 @@ async def get_historical_metrics(
         "success": True,
         "message": "Historical data not available yet. Coming soon!",
         "tenant_id": tenant_id
+    }
+
+
+@router.get("/wildcard-stats")
+async def get_wildcard_tracker_stats(
+    tenant_id: str = Depends(get_tenant_id)
+):
+    """
+    Get wildcard tracker statistics for debugging and monitoring.
+    
+    This shows ALL subjects being used in the system, helping identify
+    any messages that might be bypassing normal tracking.
+    """
+    # Validate tenant (admin only in production)
+    await validate_tenant(tenant_id)
+    
+    stats = wildcard_tracker.get_stats()
+    
+    return {
+        "tracker_stats": stats,
+        "description": "These stats show ALL messages flowing through NATS",
+        "note": "If messages appear here but not in regular tracking, they may be using non-standard subjects"
     }

@@ -13,6 +13,7 @@ from .db import dynamodb
 from nats_client import nats_manager
 from .websocket import agent_router, dashboard_router
 from api.services.heartbeat_service import heartbeat_service
+from api.services.simple_wildcard_tracker import wildcard_tracker
 
 
 # Configure logging
@@ -126,6 +127,10 @@ async def startup_event():
             # Start heartbeat service after NATS is connected
             await heartbeat_service.start()
             logger.info("Heartbeat service started")
+            
+            # Start wildcard message tracker for comprehensive billing
+            await wildcard_tracker.start()
+            logger.info("Wildcard message tracker started")
         except Exception as e:
             logger.error(f"Failed to connect to NATS server or start heartbeat service: {e}")
     else:
