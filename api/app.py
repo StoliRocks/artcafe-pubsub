@@ -214,12 +214,21 @@ async def startup_event():
                 
                 # Verify it's a valid UUID format
                 if len(tenant_id) == 36 and tenant_id.count('-') == 4:
+                    # Extract agent_id and channel from subject if possible
+                    agent_id = None
+                    channel_id = None
+                    
+                    # Try to extract channel from subject like "tenant_id.sensors.temperature"
+                    if len(parts) > 1:
+                        channel_id = parts[1] if parts[1] in ['sensors', 'alerts'] else None
+                    
                     await message_tracker.track_message(
                         tenant_id=tenant_id,
-                        subject=msg.subject,
-                        size=len(msg.data) if msg.data else 0
+                        agent_id=agent_id,
+                        channel_id=channel_id,
+                        message_size=len(msg.data) if msg.data else 0
                     )
-                    logger.debug(f"Tracked message on subject: {msg.subject}")
+                    logger.debug(f"Tracked message on subject: {msg.subject}, size: {len(msg.data) if msg.data else 0}")
             except Exception as e:
                 logger.debug(f"Error tracking message: {e}")
         
