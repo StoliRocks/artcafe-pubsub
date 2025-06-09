@@ -146,10 +146,10 @@ async def get_billing_info(
             "storage_gb": round(storage_gb, 2)  # Round to 2 decimal places
         },
         "limits": {
-            "agents": tenant.max_agents,
-            "channels": tenant.max_channels,
-            "messages_per_day": tenant.max_messages_per_day,
-            "api_calls_per_day": tenant.max_messages_per_day // 5,
+            "agents": getattr(tenant, 'max_agents', 10),
+            "channels": getattr(tenant, 'max_channels', 10),
+            "messages_per_day": getattr(tenant, 'max_messages_per_day', 10000),
+            "api_calls_per_day": getattr(tenant, 'max_messages_per_day', 10000) // 5,
             "storage_gb": 10  # Default 10GB storage limit
         },
         "success": True
