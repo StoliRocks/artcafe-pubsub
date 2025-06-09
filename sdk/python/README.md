@@ -1,50 +1,44 @@
-# ArtCafe.ai Agent Python SDK
+# ArtCafe.ai Python SDK
 
-This SDK provides a client implementation for ArtCafe.ai agents to connect to the PubSub service.
+This SDK provides a client implementation for ArtCafe.ai agents to connect directly to NATS using NKey authentication.
 
 ## Installation
 
 ```bash
-# From PyPI (once published)
-pip install artcafe-agent
-
-# From source
-git clone https://github.com/artcafe-ai/agent-sdk.git
-cd agent-sdk/python
-pip install -e .
+pip install nats-py
 ```
 
 ## Quick Start
 
 ```python
 import asyncio
-import logging
 from artcafe_agent import ArtCafeAgent
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-
 async def main():
-    # Create agent
+    # Create agent with NKey authentication
     agent = ArtCafeAgent(
-        agent_id="your-agent-id",
+        client_id="your-client-id",
         tenant_id="your-tenant-id",
-        private_key_path="/path/to/private_key"
+        nkey_seed="SUABTHCUEEB7DW66XQTPYIJT4OXFHX72FYAC26I6F4MWCKMTFSFP7MRY5U"
     )
     
-    # Register command handlers
-    async def handle_process_data(args):
-        # Process data and return result
-        data = args.get("data", {})
-        return {"processed": True, "result": f"Processed {len(data)} items"}
+    # Connect to NATS
+    await agent.connect()
     
-    agent.register_command("process_data", handle_process_data)
+    # Subscribe to messages
+    async def handle_task(subject, data):
+        print(f"Received task on {subject}: {data}")
+        # Process and return result
+        result = {"task_id": data.get("id"), "status": "completed"}
+        await agent.publish("tasks.complete", result)
     
-    # Start agent
-    try:
-        await agent.start()
-    except KeyboardInterrupt:
-        await agent.stop()
+    await agent.subscribe("tasks.*", handle_task)
+    
+    # Publish a message
+    await agent.publish("status.online", {"client_id": agent.client_id})
+    
+    # Keep running
+    await agent.start()
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -52,116 +46,152 @@ if __name__ == "__main__":
 
 ## Authentication
 
-The SDK handles authentication automatically using the SSH key challenge-response flow:
+The SDK uses NKey authentication for secure connection to NATS:
 
-1. The agent requests a challenge from the ArtCafe.ai platform
-2. The agent signs the challenge with its private key
-3. The platform verifies the signature and issues a JWT token
-4. The agent uses the JWT token for subsequent API calls
+1. Create a client in the ArtCafe dashboard
+2. Save the NKey seed (shown only once)
+3. Use the seed to authenticate your agent
 
-## Commands
+## Core Methods
 
-Register command handlers for your agent:
+### Connect and Disconnect
 
 ```python
-# Simple command
-async def handle_ping(args):
-    return {"pong": True}
+# Connect to NATS
+await agent.connect()
 
-agent.register_command("ping", handle_ping)
-
-# More complex command
-async def handle_transform(args):
-    data = args.get("data", [])
-    transform_type = args.get("type", "uppercase")
-    
-    if transform_type == "uppercase":
-        result = [item.upper() for item in data]
-    elif transform_type == "lowercase":
-        result = [item.lower() for item in data]
-    else:
-        raise ValueError(f"Unknown transform type: {transform_type}")
-    
-    return {"transformed": result}
-
-agent.register_command("transform", handle_transform)
+# Disconnect when done
+await agent.disconnect()
 ```
 
-## Status Updates
-
-Update your agent's status:
+### Subscribe to Messages
 
 ```python
-# Set status to busy with current task
-await agent.update_status("busy", task_id="task-123", progress=50)
+# Subscribe with a handler function
+async def message_handler(subject, data):
+    print(f"Message on {subject}: {data}")
 
-# Set status to error
-await agent.update_status("error")
+await agent.subscribe("events.*", message_handler)
 
-# Set status back to online
-await agent.update_status("online")
+# Or use the decorator pattern
+@agent.on_message("alerts.high")
+async def handle_alert(subject, data):
+    print(f"Alert: {data}")
+```
+
+### Publish Messages
+
+```python
+# Publish JSON data
+await agent.publish("sensor.temperature", {"value": 23.5, "unit": "celsius"})
+
+# Publish raw bytes
+await agent.publish("binary.data", b"raw bytes data")
+```
+
+### Request/Response Pattern
+
+```python
+# Send request and wait for response
+try:
+    response = await agent.request("service.echo", {"message": "hello"}, timeout=5.0)
+    print(f"Response: {response}")
+except TimeoutError:
+    print("Request timed out")
 ```
 
 ## Configuration
 
-The SDK accepts the following configuration:
+The SDK accepts the following parameters:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `agent_id` | Unique identifier for this agent | (required) |
-| `tenant_id` | Tenant identifier | (required) |
-| `private_key_path` | Path to agent's SSH private key | (required) |
-| `api_endpoint` | Base URL for ArtCafe PubSub API | https://api.artcafe.ai |
+| `client_id` | Your client ID from ArtCafe dashboard | (required) |
+| `tenant_id` | Your tenant/organization ID | (required) |
+| `nkey_seed` | NKey seed string or path to seed file | (required) |
+| `nats_url` | NATS server URL | nats://nats.artcafe.ai:4222 |
+| `name` | Friendly name for the agent | (client_id) |
+| `metadata` | Optional metadata dictionary | {} |
 | `log_level` | Logging verbosity | INFO |
 | `heartbeat_interval` | Seconds between heartbeats | 30 |
 
-## Advanced Usage
+## Subject Patterns
 
-### Custom Metrics
+NATS uses dot-separated subjects with wildcards:
 
-Send custom metrics with heartbeats:
+- `*` matches a single token
+- `>` matches one or more tokens
 
+Examples:
 ```python
-import psutil
+# Subscribe to all temperature sensors
+await agent.subscribe("sensors.temperature.*")
 
-# The SDK will automatically include these metrics if psutil is installed
-# But you can also manually include metrics in your status updates:
+# Subscribe to all sensor data
+await agent.subscribe("sensors.>")
 
-memory = psutil.virtual_memory()
-cpu = psutil.cpu_percent(interval=1)
-
-await agent.update_status("online", metrics={
-    "cpu_percent": cpu,
-    "memory_percent": memory.percent,
-    "disk_usage": psutil.disk_usage('/').percent
-})
+# Subscribe to specific sensor
+await agent.subscribe("sensors.temperature.room1")
 ```
 
-### Error Handling
+## Error Handling
 
-The SDK implements automatic reconnection with exponential backoff:
+The SDK includes automatic reconnection and error callbacks:
 
 ```python
-# Customize error handling
-try:
-    await agent.start()
-except Exception as e:
-    logging.error(f"Fatal error: {e}")
-    # Implement custom error reporting
-    send_alert_email(f"Agent {agent.agent_id} failed: {e}")
+# Connection will automatically reconnect on failure
+# Errors are logged automatically
+
+# For custom error handling
+agent = ArtCafeAgent(
+    client_id="my-client",
+    tenant_id="my-tenant",
+    nkey_seed=seed,
+    log_level="DEBUG"  # More verbose logging
+)
 ```
 
-## Security Considerations
+## Example: Multi-Agent System
 
-1. Store private keys securely with appropriate permissions
-2. Never hardcode credentials in your agent code
-3. Use environment variables for sensitive values
-4. Run agents with minimal privileges
-5. Regularly rotate SSH keys
+```python
+# Agent 1: Data Producer
+producer = ArtCafeAgent(
+    client_id="producer-1",
+    tenant_id="my-tenant",
+    nkey_seed=producer_seed
+)
+
+await producer.connect()
+
+# Publish sensor data
+while True:
+    data = {"temperature": read_sensor(), "timestamp": datetime.utcnow().isoformat()}
+    await producer.publish("sensors.temperature.outdoor", data)
+    await asyncio.sleep(5)
+
+# Agent 2: Data Processor
+processor = ArtCafeAgent(
+    client_id="processor-1", 
+    tenant_id="my-tenant",
+    nkey_seed=processor_seed
+)
+
+await processor.connect()
+
+@processor.on_message("sensors.temperature.*")
+async def process_temperature(subject, data):
+    if data["temperature"] > 30:
+        await processor.publish("alerts.high_temp", {
+            "sensor": subject,
+            "value": data["temperature"],
+            "timestamp": data["timestamp"]
+        })
+
+await processor.start()
+```
 
 ## Support
 
-For assistance with the SDK:
-- Email: support@artcafe.ai
+For assistance:
 - Documentation: https://docs.artcafe.ai
-- GitHub: https://github.com/artcafe-ai/agent-sdk
+- Dashboard: https://www.artcafe.ai/dashboard

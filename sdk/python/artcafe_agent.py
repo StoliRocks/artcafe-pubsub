@@ -2,32 +2,22 @@
 ArtCafe.ai Agent SDK for Python
 
 This module provides a client implementation for ArtCafe.ai agents to
-connect to the PubSub service.
-
-NOTE: This is the legacy SDK. For new agents, use artcafe_agent_v2.py
-which supports the new AgentMessage protocol.
+connect directly to NATS using NKey authentication.
 """
 
 import asyncio
 import json
-import time
 import logging
-import base64
-import uuid
-import socket
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Any, Optional, Callable, Awaitable, Union
+import tempfile
+import time
+from typing import Any, Callable, Dict, Optional, Union
+from datetime import datetime
 
-import jwt
-import websockets
-import httpx
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
-from cryptography.hazmat.primitives import hashes
+import nats
+from nats.errors import ConnectionClosedError, TimeoutError, NoRespondersError
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 
 class ArtCafeAgentError(Exception):
@@ -45,23 +35,19 @@ class ConnectionError(ArtCafeAgentError):
     pass
 
 
-class CommandError(ArtCafeAgentError):
-    """Command execution error"""
-    pass
-
-
 class ArtCafeAgent:
     """
-    Client for ArtCafe.ai agents to connect to the PubSub service.
+    ArtCafe.ai agent with direct NATS connection using NKey authentication.
     """
     
     def __init__(
         self,
-        agent_id: str,
+        client_id: str,
         tenant_id: str,
-        private_key_path: str,
-        api_endpoint: str = "https://api.artcafe.ai/prod/api/v1",
-        ws_endpoint: str = "wss://ws.artcafe.ai",
+        nkey_seed: Union[str, bytes],
+        nats_url: str = "nats://nats.artcafe.ai:4222",
+        name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         log_level: str = "INFO",
         heartbeat_interval: int = 30
     ):
@@ -69,23 +55,25 @@ class ArtCafeAgent:
         Initialize the ArtCafe agent client.
         
         Args:
-            agent_id: Agent ID
-            tenant_id: Tenant ID
-            private_key_path: Path to the SSH private key file
-            api_endpoint: API endpoint URL (default: https://api.artcafe.ai/prod/api/v1)
-            ws_endpoint: WebSocket endpoint URL (default: wss://ws.artcafe.ai)
+            client_id: Client ID from the ArtCafe dashboard
+            tenant_id: Tenant/organization ID
+            nkey_seed: NKey seed string or path to seed file
+            nats_url: NATS server URL
+            name: Optional name for the agent
+            metadata: Optional metadata dictionary
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
             heartbeat_interval: Seconds between heartbeats
         """
-        self.agent_id = agent_id
+        self.client_id = client_id
         self.tenant_id = tenant_id
-        self.private_key_path = private_key_path
-        self.api_endpoint = api_endpoint
-        self.ws_endpoint = ws_endpoint
+        self.nkey_seed = nkey_seed
+        self.nats_url = nats_url
+        self.name = name or client_id
+        self.metadata = metadata or {}
         self.heartbeat_interval = heartbeat_interval
         
         # Setup logging
-        self.logger = logging.getLogger(f"ArtCafeAgent-{agent_id}")
+        self.logger = logging.getLogger(f"ArtCafeAgent-{client_id}")
         log_level_value = getattr(logging, log_level.upper(), logging.INFO)
         self.logger.setLevel(log_level_value)
         
@@ -97,624 +85,269 @@ class ArtCafeAgent:
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
         
-        # Authentication
-        self.jwt_token = None
-        self.jwt_expires_at = None
-        self.key_id = None
+        # NATS connection
+        self.nc: Optional[nats.NATS] = None
+        self._subscriptions = {}
+        self._message_handlers = {}
+        self._is_connected = False
+        self._heartbeat_task = None
         
-        # WebSocket
-        self.ws = None
-        self.ws_url = f"{self.ws_endpoint}/api/v1/ws/agent/{self.agent_id}"
-        
-        # State
-        self.running = False
-        self.status = "offline"
-        self.current_task = None
-        self.hostname = socket.gethostname()
-        
-        # Message handlers
-        self.message_handlers = {
-            "command": self._handle_command,
-            "ping": self._handle_ping,
-            "status_request": self._handle_status_request
-        }
-        self.command_handlers = {}
-        
-        # Load private key
-        self._load_private_key()
-        
-        self.logger.info(f"Agent initialized: {agent_id} on {self.hostname}")
+        self.logger.info(f"Agent initialized: {client_id}")
     
-    def _load_private_key(self):
-        """Load private key from file (supports both OpenSSH and PKCS#8 formats)"""
+    async def connect(self):
+        """Connect to NATS using NKey authentication."""
         try:
-            with open(self.private_key_path, 'rb') as key_file:
-                key_data = key_file.read()
-            
-            # Try to detect the key format
-            if b'-----BEGIN OPENSSH PRIVATE KEY-----' in key_data:
-                # OpenSSH format
-                self.logger.debug("Detected OpenSSH format private key")
-                self.private_key = serialization.load_ssh_private_key(
-                    key_data,
-                    password=None
-                )
+            # Handle NKey seed
+            if isinstance(self.nkey_seed, str) and os.path.exists(self.nkey_seed):
+                # It's a file path
+                creds_file = self.nkey_seed
             else:
-                # Try PKCS#8 or PKCS#1 format
-                self.logger.debug("Attempting to load as PEM private key")
-                self.private_key = serialization.load_pem_private_key(
-                    key_data,
-                    password=None
-                )
+                # It's the seed string - write to temp file
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.nkey') as f:
+                    if isinstance(self.nkey_seed, bytes):
+                        f.write(self.nkey_seed.decode())
+                    else:
+                        f.write(self.nkey_seed)
+                    creds_file = f.name
             
-            self.logger.debug(f"Private key loaded from {self.private_key_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to load private key: {e}")
-            raise AuthenticationError(f"Failed to load private key: {e}")
-    
-    def register_command(self, command_name: str, handler: Callable):
-        """
-        Register a handler for a specific command.
-        
-        Args:
-            command_name: Name of the command
-            handler: Function to handle the command
-        """
-        self.command_handlers[command_name] = handler
-        self.logger.debug(f"Registered handler for command: {command_name}")
-    
-    async def authenticate(self) -> bool:
-        """
-        Authenticate with the ArtCafe.ai platform using SSH key.
-        
-        Returns:
-            True if authentication successful, False otherwise
-        """
-        try:
-            self.logger.info("Starting authentication")
-            
-            # Get challenge
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{self.api_endpoint}/auth/agent/challenge",
-                    json={"agent_id": self.agent_id, "tenant_id": self.tenant_id}
-                )
-                
-                if response.status_code != 200:
-                    self.logger.error(f"Failed to get challenge: {response.text}")
-                    return False
-                
-                challenge_data = response.json()
-                challenge = challenge_data["challenge"]
-                
-                self.logger.debug(f"Received challenge: {challenge[:10]}...")
-                
-                # Sign challenge
-                signature = self._sign_challenge(challenge)
-                signature_b64 = base64.b64encode(signature).decode()
-                
-                # For agents, the key_id is the agent_id itself
-                # since we store public keys directly in agent records
-                key_id = self.agent_id
-                
-                # Verify signature using agent-specific endpoint
-                response = await client.post(
-                    f"{self.api_endpoint}/auth/agent/verify",
-                    json={
-                        "tenant_id": self.tenant_id,
-                        "agent_id": self.agent_id,
-                        "challenge": challenge,
-                        "response": signature_b64
-                    }
-                )
-                
-                if response.status_code != 200:
-                    self.logger.error(f"Authentication failed: {response.text}")
-                    return False
-                
-                auth_result = response.json()
-                
-                if not auth_result["valid"]:
-                    self.logger.error("Invalid signature")
-                    return False
-                
-                self.jwt_token = auth_result["token"]
-                payload = jwt.decode(
-                    self.jwt_token,
-                    options={"verify_signature": False}
-                )
-                self.jwt_expires_at = datetime.fromtimestamp(payload["exp"])
-                self.key_id = key_id
-                
-                self.logger.info("Authentication successful")
-                return True
-                
-        except Exception as e:
-            self.logger.error(f"Authentication error: {e}")
-            return False
-    
-    async def _get_agent_key_id(self) -> Optional[str]:
-        """
-        Get the agent's SSH key ID by querying its details.
-        
-        Returns:
-            SSH key ID or None if not found
-        """
-        try:
-            # Get temporary JWT token for querying
-            temp_token = jwt.encode(
-                {
-                    "sub": self.agent_id,
-                    "tenant_id": self.tenant_id,
-                    "exp": datetime.utcnow() + timedelta(minutes=5)
-                },
-                "temporary",
-                algorithm="HS256"
+            # Connect to NATS
+            self.nc = await nats.connect(
+                self.nats_url,
+                credentials=creds_file,
+                name=f"{self.name} ({self.client_id})",
+                error_cb=self._error_callback,
+                disconnected_cb=self._disconnected_callback,
+                reconnected_cb=self._reconnected_callback,
+                closed_cb=self._closed_callback,
             )
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # Get keys for this agent
-                response = await client.get(
-                    f"{self.api_endpoint}/ssh-keys",
-                    params={"agent_id": self.agent_id, "key_type": "agent"},
-                    headers={
-                        "Authorization": f"Bearer {temp_token}",
-                        "x-tenant-id": self.tenant_id
-                    }
-                )
-                
-                if response.status_code != 200:
-                    self.logger.error(f"Failed to get agent keys: {response.text}")
-                    return None
-                
-                data = response.json()
-                
-                if not data["ssh_keys"]:
-                    self.logger.error(f"No SSH keys found for agent {self.agent_id}")
-                    return None
-                
-                # Use the first active key
-                for key in data["ssh_keys"]:
-                    if not key.get("revoked", False):
-                        return key["key_id"]
-                
-                self.logger.error("No active SSH keys found")
-                return None
+            self._is_connected = True
+            self.logger.info(f"Connected to NATS as {self.client_id}")
+            
+            # Start heartbeat
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            
+            # Clean up temp file if created
+            if creds_file != self.nkey_seed and os.path.exists(creds_file):
+                os.unlink(creds_file)
                 
         except Exception as e:
-            self.logger.error(f"Error getting agent key ID: {e}")
-            return None
-    
-    def _sign_challenge(self, challenge: str) -> bytes:
-        """
-        Sign a challenge string with the private key.
-        
-        Args:
-            challenge: Challenge string to sign
-            
-        Returns:
-            Signature bytes
-        """
-        try:
-            # Convert challenge to bytes
-            message = challenge.encode('utf-8')
-            
-            # Create digest
-            digest = hashes.Hash(hashes.SHA256())
-            digest.update(message)
-            digest_bytes = digest.finalize()
-            
-            # Sign the digest
-            signature = self.private_key.sign(
-                digest_bytes,
-                padding.PKCS1v15(),
-                Prehashed(hashes.SHA256())
-            )
-            
-            return signature
-            
-        except Exception as e:
-            self.logger.error(f"Error signing challenge: {e}")
-            raise AuthenticationError(f"Error signing challenge: {e}")
-    
-    def is_authenticated(self) -> bool:
-        """
-        Check if the agent is authenticated with a valid token.
-        
-        Returns:
-            True if authenticated, False otherwise
-        """
-        if not self.jwt_token or not self.jwt_expires_at:
-            return False
-        
-        # Check if token expires in the next 5 minutes
-        return datetime.now() + timedelta(minutes=5) < self.jwt_expires_at
-    
-    async def connect(self) -> bool:
-        """
-        Connect to the WebSocket server.
-        
-        Returns:
-            True if connected, False otherwise
-        """
-        try:
-            if not self.is_authenticated():
-                self.logger.info("Not authenticated, authenticating...")
-                if not await self.authenticate():
-                    return False
-            
-            self.logger.info(f"Connecting to WebSocket: {self.ws_url}")
-            
-            # Create headers for WebSocket connection
-            headers = {
-                "Authorization": f"Bearer {self.jwt_token}",
-                "x-tenant-id": self.tenant_id
-            }
-            
-            # Connect with extra_headers
-            self.ws = await websockets.connect(
-                self.ws_url,
-                extra_headers=headers
-            )
-            
-            self.logger.info("Connected to WebSocket")
-            
-            # Send initial status update
-            await self.update_status("online")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Connection error: {e}")
-            return False
+            self.logger.error(f"Failed to connect: {e}")
+            raise ConnectionError(f"Failed to connect: {e}")
     
     async def disconnect(self):
-        """Disconnect from the WebSocket server"""
-        if self.ws:
-            self.logger.info("Disconnecting from WebSocket")
+        """Disconnect from NATS."""
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
             
-            try:
-                # Send offline status
-                await self.update_status("offline")
-                
-                # Close connection
-                await self.ws.close()
-                self.ws = None
-                
-            except Exception as e:
-                self.logger.error(f"Error during disconnect: {e}")
-                self.ws = None
+        if self.nc:
+            await self.nc.close()
+            
+        self._is_connected = False
+        self.logger.info("Disconnected from NATS")
     
-    async def update_status(self, status: str, task_id: Optional[str] = None, progress: Optional[int] = None):
+    async def subscribe(self, subject: str, handler: Optional[Callable] = None):
         """
-        Update agent status.
+        Subscribe to a subject pattern.
         
         Args:
-            status: New status (online, offline, busy, error)
-            task_id: Optional current task ID
-            progress: Optional task progress (0-100)
+            subject: Subject pattern (e.g., "tasks.*", "alerts.>")
+            handler: Optional message handler function
         """
-        self.status = status
-        self.current_task = task_id
+        # Add tenant prefix
+        full_subject = f"{self.tenant_id}.{subject}"
         
-        status_data = {
-            "status": status,
-            "hostname": self.hostname
-        }
+        # Create subscription
+        sub = await self.nc.subscribe(full_subject)
+        self._subscriptions[subject] = sub
         
-        if task_id:
-            status_data["current_task"] = task_id
-        
-        if progress is not None:
-            status_data["progress"] = progress
-        
-        # Send status update via API
-        try:
-            if not self.is_authenticated():
-                await self.authenticate()
+        if handler:
+            self._message_handlers[subject] = handler
             
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.put(
-                    f"{self.api_endpoint}/agents/{self.agent_id}/status",
-                    json={"status": status},
-                    headers={
-                        "Authorization": f"Bearer {self.jwt_token}",
-                        "x-tenant-id": self.tenant_id
-                    }
-                )
-            
-            # Also send through WebSocket if connected
-            if self.ws:
-                status_msg = {
-                    "type": "status",
-                    "id": str(uuid.uuid4()),
-                    "data": status_data,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-                await self.ws.send(json.dumps(status_msg))
-                
-        except Exception as e:
-            self.logger.error(f"Error updating status: {e}")
+        self.logger.info(f"Subscribed to {full_subject}")
+        
+        # Start message processor if handler provided
+        if handler:
+            asyncio.create_task(self._process_messages(sub, subject, handler))
     
-    async def _send_heartbeat(self):
-        """Send heartbeat message to the server"""
-        if not self.ws:
-            return
+    async def unsubscribe(self, subject: str):
+        """Unsubscribe from a subject."""
+        if subject in self._subscriptions:
+            await self._subscriptions[subject].unsubscribe()
+            del self._subscriptions[subject]
+            if subject in self._message_handlers:
+                del self._message_handlers[subject]
+            self.logger.info(f"Unsubscribed from {subject}")
+    
+    async def publish(self, subject: str, data: Any, reply: Optional[str] = None):
+        """
+        Publish a message to a subject.
+        
+        Args:
+            subject: Target subject
+            data: Message data (will be JSON encoded if not bytes)
+            reply: Optional reply-to subject
+        """
+        # Add tenant prefix
+        full_subject = f"{self.tenant_id}.{subject}"
+        
+        # Encode data
+        if isinstance(data, bytes):
+            payload = data
+        else:
+            payload = json.dumps(data).encode()
+        
+        # Publish
+        await self.nc.publish(full_subject, payload, reply=reply)
+        self.logger.debug(f"Published to {full_subject}")
+    
+    async def request(self, subject: str, data: Any, timeout: float = 5.0) -> Any:
+        """
+        Send a request and wait for a response.
+        
+        Args:
+            subject: Target subject
+            data: Request data
+            timeout: Response timeout in seconds
+            
+        Returns:
+            Response data (JSON decoded if possible)
+        """
+        # Add tenant prefix
+        full_subject = f"{self.tenant_id}.{subject}"
+        
+        # Encode data
+        if isinstance(data, bytes):
+            payload = data
+        else:
+            payload = json.dumps(data).encode()
         
         try:
-            # Get system metrics
-            heartbeat_data = {
-                "agent_id": self.agent_id,
-                "status": self.status,
-                "hostname": self.hostname,
-                "timestamp": datetime.utcnow().isoformat()
-            }
+            # Send request
+            response = await self.nc.request(full_subject, payload, timeout=timeout)
             
-            # Add CPU and memory usage if psutil is available
+            # Decode response
             try:
-                import psutil
-                process = psutil.Process(os.getpid())
-                heartbeat_data["cpu_percent"] = process.cpu_percent()
-                heartbeat_data["memory_percent"] = process.memory_percent()
-                heartbeat_data["memory_mb"] = process.memory_info().rss / (1024 * 1024)
-            except ImportError:
-                pass
-            
-            heartbeat_msg = {
-                "type": "heartbeat",
-                "id": f"hb-{uuid.uuid4()}",
-                "data": heartbeat_data,
-                "timestamp": datetime.utcnow().isoformat()
-            }
-            
-            await self.ws.send(json.dumps(heartbeat_msg))
-            self.logger.debug("Heartbeat sent")
-            
-        except Exception as e:
-            self.logger.error(f"Error sending heartbeat: {e}")
+                return json.loads(response.data.decode())
+            except:
+                return response.data
+                
+        except TimeoutError:
+            self.logger.error(f"Request timeout for {subject}")
+            raise
+        except NoRespondersError:
+            self.logger.error(f"No responders for {subject}")
+            raise
+    
+    def on_message(self, subject: str):
+        """
+        Decorator for message handlers.
+        
+        Example:
+            @agent.on_message("tasks.new")
+            async def handle_new_task(subject, data):
+                # Process task
+                await agent.publish("tasks.result", result)
+        """
+        def decorator(func):
+            asyncio.create_task(self.subscribe(subject, func))
+            return func
+        return decorator
     
     async def start(self):
         """
         Start the agent and maintain connection.
-        
-        This method blocks until stop() is called.
         """
-        self.running = True
-        retry_delay = 1
-        
-        while self.running:
-            try:
-                if not self.ws:
-                    if not await self.connect():
-                        # Connection failed, wait before retry
-                        sleep_time = min(retry_delay, 120)
-                        self.logger.info(f"Connection failed, retrying in {sleep_time}s")
-                        await asyncio.sleep(sleep_time)
-                        retry_delay *= 2
-                        continue
-                    
-                    # Reset backoff on successful connection
-                    retry_delay = 1
-                
-                # Start heartbeat task
-                heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-                
-                # Message processing loop
-                try:
-                    async for message in self.ws:
-                        retry_delay = 1  # Reset backoff on successful messages
-                        
-                        # Process message
-                        asyncio.create_task(self._process_message(message))
-                        
-                except websockets.exceptions.ConnectionClosed:
-                    self.logger.warning("WebSocket connection closed")
-                
-                finally:
-                    # Clean up heartbeat task
-                    heartbeat_task.cancel()
-                    try:
-                        await heartbeat_task
-                    except asyncio.CancelledError:
-                        pass
-                    
-                    self.ws = None
-                
-                # Wait before reconnecting
-                if self.running:
-                    await asyncio.sleep(1)
-                
-            except Exception as e:
-                self.logger.error(f"Connection error: {e}")
-                
-                if self.running:
-                    # Exponential backoff with cap
-                    sleep_time = min(retry_delay, 120)
-                    self.logger.info(f"Reconnecting in {sleep_time}s")
-                    await asyncio.sleep(sleep_time)
-                    retry_delay *= 2
-                    
-                    # Reset connection
-                    self.ws = None
-    
-    async def _heartbeat_loop(self):
-        """Send periodic heartbeats"""
-        while self.ws and self.running:
-            try:
-                await self._send_heartbeat()
-                await asyncio.sleep(self.heartbeat_interval)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.logger.error(f"Heartbeat error: {e}")
-                await asyncio.sleep(5)  # Wait before retry
-    
-    async def _process_message(self, message: str):
-        """
-        Process incoming WebSocket message.
-        
-        Args:
-            message: Raw message string from WebSocket
-        """
+        if not self._is_connected:
+            await self.connect()
+            
         try:
-            data = json.loads(message)
-            
-            # Get message type
-            msg_type = data.get("type")
-            msg_id = data.get("id", str(uuid.uuid4()))
-            
-            self.logger.debug(f"Received message type={msg_type}, id={msg_id}")
-            
-            # Handle message based on type
-            handler = self.message_handlers.get(msg_type)
-            
-            if handler:
-                response = await handler(data)
-                
-                # Send response if provided
-                if response:
-                    await self.ws.send(json.dumps(response))
-            else:
-                self.logger.warning(f"No handler for message type: {msg_type}")
-                
-        except json.JSONDecodeError:
-            self.logger.error(f"Invalid JSON message: {message}")
-        except Exception as e:
-            self.logger.error(f"Error processing message: {e}")
-    
-    async def _handle_command(self, message: Dict) -> Dict:
-        """
-        Handle command message.
-        
-        Args:
-            message: Command message
-            
-        Returns:
-            Response message
-        """
-        command_data = message.get("data", {})
-        command_name = command_data.get("command")
-        
-        if not command_name:
-            return {
-                "type": "response",
-                "id": str(uuid.uuid4()),
-                "data": {
-                    "command_id": message.get("id"),
-                    "status": "error",
-                    "error": "Invalid command format"
-                },
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        
-        self.logger.info(f"Received command: {command_name}")
-        
-        # Update status to busy
-        await self.update_status("busy", task_id=message.get("id"))
-        
-        # Find command handler
-        handler = self.command_handlers.get(command_name)
-        
-        if not handler:
-            await self.update_status("online")
-            return {
-                "type": "response",
-                "id": str(uuid.uuid4()),
-                "data": {
-                    "command_id": message.get("id"),
-                    "status": "error",
-                    "error": f"Unknown command: {command_name}"
-                },
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        
-        # Execute command
-        try:
-            result = await handler(command_data.get("args", {}))
-            
-            # Update status back to online
-            await self.update_status("online")
-            
-            return {
-                "type": "response",
-                "id": str(uuid.uuid4()),
-                "data": {
-                    "command_id": message.get("id"),
-                    "status": "success",
-                    "result": result
-                },
-                "timestamp": datetime.utcnow().isoformat()
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error executing command {command_name}: {e}")
-            
-            # Update status back to online
-            await self.update_status("online")
-            
-            return {
-                "type": "response",
-                "id": str(uuid.uuid4()),
-                "data": {
-                    "command_id": message.get("id"),
-                    "status": "error",
-                    "error": str(e)
-                },
-                "timestamp": datetime.utcnow().isoformat()
-            }
-    
-    async def _handle_ping(self, message: Dict) -> Dict:
-        """
-        Handle ping message.
-        
-        Args:
-            message: Ping message
-            
-        Returns:
-            Pong response
-        """
-        return {
-            "type": "pong",
-            "id": str(uuid.uuid4()),
-            "data": {
-                "ping_id": message.get("id"),
-                "time": datetime.utcnow().isoformat()
-            },
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    
-    async def _handle_status_request(self, message: Dict) -> Dict:
-        """
-        Handle status request message.
-        
-        Args:
-            message: Status request message
-            
-        Returns:
-            Status response
-        """
-        return {
-            "type": "status",
-            "id": str(uuid.uuid4()),
-            "data": {
-                "request_id": message.get("id"),
-                "agent_id": self.agent_id,
-                "status": self.status,
-                "hostname": self.hostname,
-                "current_task": self.current_task
-            },
-            "timestamp": datetime.utcnow().isoformat()
-        }
+            while self._is_connected:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            self.logger.info("Shutting down...")
+        finally:
+            await self.disconnect()
     
     async def stop(self):
         """Stop the agent"""
         self.logger.info("Stopping agent")
-        self.running = False
-        
-        # Disconnect from WebSocket
+        self._is_connected = False
         await self.disconnect()
-        
         self.logger.info("Agent stopped")
+    
+    # Compatibility method names
+    async def run_forever(self):
+        """Alias for start() for compatibility"""
+        await self.start()
+    
+    # Private methods
+    
+    async def _process_messages(self, subscription, subject: str, handler: Callable):
+        """Process messages for a subscription."""
+        async for msg in subscription.messages:
+            try:
+                # Decode message
+                try:
+                    data = json.loads(msg.data.decode())
+                except:
+                    data = msg.data
+                
+                # Remove tenant prefix from subject for handler
+                clean_subject = msg.subject.replace(f"{self.tenant_id}.", "", 1)
+                
+                # Call handler
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(clean_subject, data)
+                else:
+                    handler(clean_subject, data)
+                    
+            except Exception as e:
+                self.logger.error(f"Error processing message on {subject}: {e}")
+    
+    async def _heartbeat_loop(self):
+        """Send periodic heartbeats."""
+        # Use efficient heartbeat subject pattern
+        heartbeat_subject = f"_heartbeat.{self.tenant_id}.{self.client_id}"
+        
+        while self._is_connected:
+            try:
+                # Send minimal heartbeat (just timestamp)
+                heartbeat_data = {
+                    "ts": int(time.time()),
+                    "v": "1.0"  # Version for future compatibility
+                }
+                
+                # Publish directly to heartbeat subject (no tenant prefix needed)
+                await self.nc.publish(
+                    heartbeat_subject,
+                    json.dumps(heartbeat_data).encode()
+                )
+                
+                self.logger.debug(f"Heartbeat sent to {heartbeat_subject}")
+                await asyncio.sleep(self.heartbeat_interval)
+            except Exception as e:
+                self.logger.error(f"Heartbeat error: {e}")
+                await asyncio.sleep(5)
+    
+    def _error_callback(self, e):
+        """Handle NATS errors."""
+        self.logger.error(f"NATS error: {e}")
+    
+    def _disconnected_callback(self):
+        """Handle disconnection."""
+        self.logger.warning("Disconnected from NATS")
+        self._is_connected = False
+    
+    def _reconnected_callback(self):
+        """Handle reconnection."""
+        self.logger.info("Reconnected to NATS")
+        self._is_connected = True
+    
+    def _closed_callback(self):
+        """Handle connection closed."""
+        self.logger.info("NATS connection closed")
+        self._is_connected = False
 
 
 # Example usage
@@ -722,16 +355,20 @@ async def example_agent():
     """Example agent implementation"""
     # Create agent
     agent = ArtCafeAgent(
-        agent_id="agent-123",
-        tenant_id="tenant-456",
-        private_key_path="/path/to/private_key"
+        client_id="demo-client",
+        tenant_id="your-tenant-id",
+        nkey_seed="SUABTHCUEEB7DW66XQTPYIJT4OXFHX72FYAC26I6F4MWCKMTFSFP7MRY5U"
     )
     
-    # Register command handlers
-    async def handle_echo(args):
-        return {"message": args.get("message", "Hello")}
+    # Define handler
+    async def handle_task(subject, data):
+        print(f"Received task on {subject}: {data}")
+        # Process and publish result
+        result = {"task_id": data.get("id"), "status": "completed"}
+        await agent.publish("tasks.complete", result)
     
-    agent.register_command("echo", handle_echo)
+    # Subscribe to tasks
+    await agent.subscribe("tasks.new", handle_task)
     
     # Start agent
     try:

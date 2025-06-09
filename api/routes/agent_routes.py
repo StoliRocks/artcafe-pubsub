@@ -25,6 +25,7 @@ class AgentCreateResponse(BaseModel):
 
 
 from api.services import agent_nkey_service, usage_service
+from api.services.heartbeat_service import heartbeat_service
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -71,12 +72,51 @@ async def list_agents(
         
         # Add type field for frontend
         agent_dict["type"] = agent_dict.get("auth_type", "ssh")  # default to ssh for existing agents
+        
+        # Get real-time status from heartbeat service
+        agent_id = agent_dict.get("agent_id")
+        if agent_id:
+            status_info = await heartbeat_service.get_agent_status(tenant_id, agent_id)
+            agent_dict["status"] = status_info.get("status", "offline")
+            agent_dict["last_seen"] = status_info.get("last_heartbeat")
+        
         formatted_agents.append(agent_dict)
     
     return AgentsResponse(
         agents=formatted_agents,
         next_token=result.get("next_token") if isinstance(result, dict) else None
     )
+
+
+@router.get("/status/summary")
+async def get_agents_status_summary(
+    tenant_id: str = Depends(get_current_tenant_id)
+):
+    """
+    Get real-time agent status summary for dashboard.
+    Optimized for performance using Redis cache.
+    """
+    try:
+        # Get online count from ultra-fast cache
+        online_count = await heartbeat_service.get_online_agents_count(tenant_id)
+        
+        # Get total agents from DB
+        result = await agent_nkey_service.list_agents(tenant_id=tenant_id, limit=1000)
+        total_count = len(result) if isinstance(result, list) else len(result.get("agents", []))
+        
+        return {
+            "total_agents": total_count,
+            "online_agents": online_count,
+            "offline_agents": total_count - online_count,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting agent status summary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get agent status"
+        )
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)

@@ -1,4 +1,3 @@
-import nkeys_fix
 import logging
 import uvicorn
 import asyncio
@@ -6,14 +5,15 @@ from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+# Apply nkeys monkey patch for missing functions
+import nkeys_fix
+
 from config.settings import settings
 from .routes import router
 from .middleware import setup_middleware
 from .db import dynamodb
 from nats_client import nats_manager
 from .websocket import agent_router, dashboard_router
-from api.services.heartbeat_service import heartbeat_service
-
 
 # Configure logging
 logging.basicConfig(
@@ -122,10 +122,6 @@ async def startup_event():
         try:
             await nats_manager.connect()
             logger.info("Connected to NATS server")
-            
-            # Start heartbeat service after NATS is connected
-            await heartbeat_service.start()
-            logger.info("Heartbeat service started")
         except Exception as e:
             logger.error(f"Failed to connect to NATS server: {e}")
     else:
@@ -161,10 +157,13 @@ async def startup_event():
         from api.services.local_message_tracker import message_tracker
         message_tracker.connect()
         logger.info("Local message tracker initialized")
-    
     except Exception as e:
         logger.error(f"Failed to initialize message tracker: {e}")
-
+    
+    # Start local backup service (Redis to disk backup)
+    try:
+        from api.services.local_backup_service import get_backup_service
+        backup_service = get_backup_service()
         await backup_service.start()
         logger.info("Local backup service started")
     except Exception as e:
@@ -189,33 +188,11 @@ async def startup_event():
     logger.info("ArtCafe.ai PubSub API started")
 
 
-    # Setup NATS message tracking for direct clients
-    try:
-        async def track_nats_msg(msg):
-            try:
-                parts = msg.subject.split('.')
-                tenant_id = parts[1] if parts[0] == 'tenant' and len(parts) > 1 else parts[0]
-                if len(tenant_id) == 36 and '-' in tenant_id:
-                    await message_tracker.track_message(
-                        tenant_id=tenant_id,
-                        subject=msg.subject,
-                        size=len(msg.data) if msg.data else 0
-                    )
-            except:
-                pass
-        
-        await nats_manager.subscribe("*.>", callback=track_nats_msg)
-        logger.info("NATS direct message tracking enabled")
-    except Exception as e:
-        logger.error(f"Failed to setup NATS tracking: {e}")
-
 @app.on_event("shutdown")
 async def shutdown_event():
     """Execute on application shutdown"""
     logger.info("Shutting down ArtCafe.ai PubSub API...")
     
-    
-
     # Stop S3 backup service
     try:
         from api.services.s3_backup_service import get_s3_backup_service
