@@ -1,9 +1,30 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
-from auth.dependencies import get_current_tenant_id
-from models import AgentCreate, AgentUpdate, AgentResponse, AgentCreateResponse, AgentsResponse
-from api.services import agent_service, usage_service
+from auth import get_current_tenant_id
+from models import AgentCreate, AgentUpdate
+
+# Response models for agents
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
+
+class AgentResponse(BaseModel):
+    """Response for single agent"""
+    agent: Dict[str, Any]
+
+class AgentsResponse(BaseModel):
+    """Response for agent list"""
+    agents: List[Dict[str, Any]]
+    next_token: Optional[str] = None
+
+class AgentCreateResponse(BaseModel):
+    """Response for agent creation"""
+    agent: Dict[str, Any]
+    nkey_seed: Optional[str] = None
+    warning: Optional[str] = None
+
+
+from api.services import agent_nkey_service, usage_service
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -24,17 +45,37 @@ async def list_agents(
     # Track API call
     await usage_service.increment_api_calls(tenant_id)
     
-    # Get agents
-    result = await agent_service.list_agents(
+    # Get agents from agent service
+    result = await agent_nkey_service.list_agents(
         tenant_id=tenant_id,
         status=status,
-        limit=limit,
-        next_token=next_token
+        limit=limit
     )
     
+    # Handle response - could be a list or dict
+    if isinstance(result, list):
+        agents_list = result
+    else:
+        agents_list = result.get("agents", [])
+    
+    # Convert Agent objects to dicts and add type field for frontend
+    formatted_agents = []
+    for agent in agents_list:
+        # Convert to dict if it's a model object
+        if hasattr(agent, 'dict'):
+            agent_dict = agent.dict()
+        elif hasattr(agent, 'model_dump'):
+            agent_dict = agent.model_dump()
+        else:
+            agent_dict = agent if isinstance(agent, dict) else vars(agent)
+        
+        # Add type field for frontend
+        agent_dict["type"] = agent_dict.get("auth_type", "ssh")  # default to ssh for existing agents
+        formatted_agents.append(agent_dict)
+    
     return AgentsResponse(
-        agents=result["agents"],
-        next_token=result["next_token"]
+        agents=formatted_agents,
+        next_token=result.get("next_token") if isinstance(result, dict) else None
     )
 
 
@@ -56,7 +97,7 @@ async def get_agent(
     await usage_service.increment_api_calls(tenant_id)
     
     # Get agent
-    agent = await agent_service.get_agent(tenant_id, agent_id)
+    agent = await agent_nkey_service.get_agent(tenant_id, agent_id)
     
     if not agent:
         raise HTTPException(
@@ -85,7 +126,7 @@ async def create_agent(
     await usage_service.increment_api_calls(tenant_id)
     
     # Create agent
-    agent, private_key = await agent_service.create_agent(tenant_id, agent_data)
+    agent, private_key = await agent_nkey_service.create_agent(tenant_id, agent_data)
     
     return AgentCreateResponse(agent=agent, private_key=private_key)
 
@@ -110,7 +151,7 @@ async def update_agent(
     await usage_service.increment_api_calls(tenant_id)
     
     # Update agent
-    agent = await agent_service.update_agent(tenant_id, agent_id, agent_data)
+    agent = await agent_nkey_service.update_agent(tenant_id, agent_id, agent_data)
     
     if not agent:
         raise HTTPException(
@@ -136,7 +177,7 @@ async def delete_agent(
     await usage_service.increment_api_calls(tenant_id)
     
     # Delete agent
-    success = await agent_service.delete_agent(tenant_id, agent_id)
+    success = await agent_nkey_service.delete_agent(tenant_id, agent_id)
     
     if not success:
         raise HTTPException(

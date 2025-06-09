@@ -14,4 +14,7 @@ __all__ = [
     "usage_service",
     "terms_acceptance_service",
     "limits_service"
+    "agent_nkey_service",
 ]
+from .agent_nkey_service import AgentService
+agent_nkey_service = AgentService()
