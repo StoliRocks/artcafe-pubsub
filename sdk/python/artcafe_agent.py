@@ -98,22 +98,14 @@ class ArtCafeAgent:
         """Connect to NATS using NKey authentication."""
         try:
             # Handle NKey seed
-            if isinstance(self.nkey_seed, str) and os.path.exists(self.nkey_seed):
-                # It's a file path
-                creds_file = self.nkey_seed
+            if isinstance(self.nkey_seed, bytes):
+                seed_str = self.nkey_seed.decode()
             else:
-                # It's the seed string - write to temp file
-                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.nkey') as f:
-                    if isinstance(self.nkey_seed, bytes):
-                        f.write(self.nkey_seed.decode())
-                    else:
-                        f.write(self.nkey_seed)
-                    creds_file = f.name
-            
-            # Connect to NATS
+                seed_str = self.nkey_seed
+                
             self.nc = await nats.connect(
                 self.nats_url,
-                credentials=creds_file,
+                nkeys_seed=seed_str,
                 name=f"{self.name} ({self.client_id})",
                 error_cb=self._error_callback,
                 disconnected_cb=self._disconnected_callback,
