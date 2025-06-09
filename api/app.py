@@ -127,7 +127,7 @@ async def startup_event():
             await heartbeat_service.start()
             logger.info("Heartbeat service started")
         except Exception as e:
-            logger.error(f"Failed to connect to NATS server: {e}")
+            logger.error(f"Failed to connect to NATS server or start heartbeat service: {e}")
     else:
         logger.info("NATS is disabled, skipping connection")
 
@@ -260,6 +260,13 @@ async def shutdown_event():
         logger.info("Channel bridge service stopped")
     except Exception as e:
         logger.error(f"Failed to stop channel bridge service: {e}")
+    
+    # Stop heartbeat service
+    try:
+        await heartbeat_service.stop()
+        logger.info("Heartbeat service stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop heartbeat service: {e}")
 
     # Close NATS connection
     await nats_manager.close()
