@@ -15,7 +15,7 @@ from collections import defaultdict
 import redis.asyncio as redis
 from boto3.dynamodb.conditions import Key
 
-from core.nats_client import nats_manager
+from nats_client import nats_manager
 from api.db.dynamodb import DynamoDBService
 from config.settings import settings
 
@@ -52,9 +52,9 @@ class HeartbeatService:
         try:
             logger.info("Starting Heartbeat Service")
             
-            # Connect to Redis
+            # Connect to Redis (local Valkey instance)
             self.redis_client = await redis.from_url(
-                settings.REDIS_URL,
+                "redis://localhost:6379",
                 encoding="utf-8",
                 decode_responses=True
             )
@@ -64,7 +64,7 @@ class HeartbeatService:
             # Subscribe to heartbeat messages
             self._subscription = await nats_manager.subscribe(
                 "_heartbeat.>",
-                cb=self._handle_heartbeat
+                callback=self._handle_heartbeat
             )
             logger.info("Subscribed to NATS heartbeat messages")
             
