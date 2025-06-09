@@ -164,7 +164,10 @@ async def startup_event():
     
     except Exception as e:
         logger.error(f"Failed to initialize message tracker: {e}")
-
+    
+    # Start local backup service
+    try:
+        from api.services.local_backup_service import backup_service
         await backup_service.start()
         logger.info("Local backup service started")
     except Exception as e:
@@ -194,18 +197,35 @@ async def startup_event():
         async def track_nats_msg(msg):
             try:
                 parts = msg.subject.split('.')
-                tenant_id = parts[1] if parts[0] == 'tenant' and len(parts) > 1 else parts[0]
-                if len(tenant_id) == 36 and '-' in tenant_id:
+                # Handle both patterns:
+                # 1. tenant.{tenant_id}.> (original pattern)
+                # 2. {tenant_id}.sensors.temperature (cyberforge pattern)
+                # 3. {tenant_id}.alerts.temperature (cyberforge pattern)
+                
+                if parts[0] == 'tenant' and len(parts) > 1:
+                    # Original pattern: tenant.{tenant_id}.>
+                    tenant_id = parts[1]
+                elif len(parts[0]) == 36 and '-' in parts[0]:
+                    # Cyberforge pattern: {tenant_id}.sensors.temperature
+                    tenant_id = parts[0]
+                else:
+                    # Not a tenant message, skip
+                    return
+                
+                # Verify it's a valid UUID format
+                if len(tenant_id) == 36 and tenant_id.count('-') == 4:
                     await message_tracker.track_message(
                         tenant_id=tenant_id,
                         subject=msg.subject,
                         size=len(msg.data) if msg.data else 0
                     )
-            except:
-                pass
+                    logger.debug(f"Tracked message on subject: {msg.subject}")
+            except Exception as e:
+                logger.debug(f"Error tracking message: {e}")
         
-        await nats_manager.subscribe("*.>", callback=track_nats_msg)
-        logger.info("NATS direct message tracking enabled")
+        # Subscribe to all messages to catch both patterns
+        await nats_manager.subscribe(">", callback=track_nats_msg)
+        logger.info("NATS direct message tracking enabled for all tenant patterns")
     except Exception as e:
         logger.error(f"Failed to setup NATS tracking: {e}")
 
