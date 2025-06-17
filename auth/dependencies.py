@@ -149,8 +149,12 @@ async def get_current_tenant_id(
                     tenant_id = user_tenants[0].tenant_id
             
             if not tenant_id:
-                # Last resort: use the default tenant ID
-                return settings.DEFAULT_TENANT_ID
+                # FIXED: Don't fall back to a default tenant - raise an error instead
+                # This prevents new users from seeing other users' data
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No organization found. Please create an organization first."
+                )
             
         return tenant_id
     except jwt.PyJWTError as e:
@@ -159,6 +163,9 @@ async def get_current_tenant_id(
             detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
         )
+    except HTTPException:
+        # Re-raise HTTPException as-is
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
